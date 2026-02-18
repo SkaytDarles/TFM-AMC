@@ -4,4 +4,5 @@ feedparser
 beautifulsoup4
 requests
 python-dotenv
+plotly
 functions-framework
