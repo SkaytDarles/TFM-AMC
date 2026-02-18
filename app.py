@@ -45,16 +45,22 @@ COLORES_DEPT = {
 }
 
 # ==========================================
-# CONEXIÓN FIREBASE (MÉTODO TOML DIRECTO)
+# CONEXIÓN FIREBASE (SOLUCIÓN DEFINITIVA)
 # ==========================================
 if not firebase_admin._apps:
     try:
         # INTENTO 1: Buscar en la Nube (Secrets Nativos)
-        # Streamlit ya convierte el TOML a un diccionario de Python automáticamente.
-        # ¡Ya no necesitamos json.loads!
+        # Leemos el diccionario de los secrets
         key_dict = dict(st.secrets["FIREBASE_KEY"])
+        
+        # --- AQUÍ ESTÁ EL TRUCO (EL PARCHE) ---
+        # Reemplazamos los "\n" literales por saltos de línea reales
+        # Esto arregla el error "InvalidByte" o "PEM file"
+        key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
+        
         cred = credentials.Certificate(key_dict)
         firebase_admin.initialize_app(cred)
+        
     except Exception as e:
         # INTENTO 2: Buscar en Local (Tu PC)
         try:
@@ -312,6 +318,7 @@ else:
                 fig2 = px.bar(grp, x='Dept', y='Score', color='Dept', color_discrete_map=COLORES_DEPT)
 
                 st.plotly_chart(fig2, use_container_width=True)
+
 
 
 
