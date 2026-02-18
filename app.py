@@ -45,8 +45,6 @@ COLORES_DEPT = {
 }
 
 # ==========================================
-# 2. CONEXIÓN FIREBASE HÍBRIDA (SIRVE PARA LOCAL Y NUBE)
-# ==========================================
 # CONEXIÓN FIREBASE (MODO HÍBRIDO)
 # ==========================================
 # Este bloque funciona tanto en tu PC como en la Nube sin tocar nada.
@@ -54,7 +52,7 @@ COLORES_DEPT = {
 if not firebase_admin._apps:
     try:
         # INTENTO 1: Buscar en la Nube (Secrets de Streamlit)
-        # Leemos la llave desde la configuración segura de la web
+        # Leemos la llave desde la configuración segura de la web que acabas de guardar
         key_content = st.secrets["FIREBASE_KEY"]["text_key"]
         # Convertimos el texto a diccionario JSON
         key_dict = json.loads(key_content)
@@ -67,12 +65,10 @@ if not firebase_admin._apps:
             cred = credentials.Certificate('serviceAccountKey.json')
             firebase_admin.initialize_app(cred)
         except:
-            st.error("❌ Error Crítico: No se encuentra la llave de seguridad (Firebase Key).")
+            st.error(f"❌ Error de conexión: No se encuentra la llave. Detalle: {e}")
             st.stop()
 
-
 db = firestore.client()
-
 # ==========================================
 # 3. AUTO-INYECCIÓN DE DATOS (FINANZAS)
 # ==========================================
@@ -320,5 +316,6 @@ else:
                 fig2 = px.bar(grp, x='Dept', y='Score', color='Dept', color_discrete_map=COLORES_DEPT)
 
                 st.plotly_chart(fig2, use_container_width=True)
+
 
 
