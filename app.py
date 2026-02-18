@@ -88,6 +88,35 @@ def limpiar_json(texto):
         return None
     except: return None
 
+def normalizar_analisis(analisis, titulo, texto):
+    """Asegura campos mínimos para no dejar tarjetas vacías en UI."""
+    analisis = analisis or {}
+
+    titulo_mejorado = analisis.get('titulo_mejorado') or analisis.get('titulo') or titulo
+    resumen = (
+        analisis.get('resumen')
+        or analisis.get('resumen_ejecutivo')
+        or analisis.get('summary')
+        or f"{texto[:200]}..."
+    )
+    accion = (
+        analisis.get('accion')
+        or analisis.get('accion_sugerida')
+        or analisis.get('sugerencia')
+        or "Leer fuente original."
+    )
+    score = analisis.get('score') or analisis.get('relevancia_score') or 70
+
+    if isinstance(resumen, list):
+        resumen = resumen[0] if resumen else "Sin resumen disponible."
+
+    return {
+        "titulo_mejorado": str(titulo_mejorado).strip() or titulo,
+        "resumen": str(resumen).strip() or "Sin resumen disponible.",
+        "accion": str(accion).strip() or "Leer fuente original.",
+        "score": score
+    }
+
 def analizar_con_gemini(texto, titulo, dept):
     """Genera el resumen usando la IA"""
     if "GOOGLE_API_KEY" not in st.secrets:
@@ -177,7 +206,7 @@ def buscador_inteligente():
             if list(docs): continue
 
             # IA
-            analisis = analizar_con_gemini(body, titulo, dept)
+            analisis = normalizar_analisis(analizar_con_gemini(body, titulo, dept), titulo, body)
             
             # Guardar
             db.collection('news_articles').add({
@@ -321,9 +350,15 @@ else:
                 fecha = n.get('published_at')
                 fecha_str = fecha.strftime("%H:%M") if filtro_tiempo == "Tiempo Real (Hoy)" else fecha.strftime("%d/%m %H:%M")
                 
-                resumen_texto = a.get('resumen_ejecutivo', ['Sin resumen'])
-                if isinstance(resumen_texto, list): resumen_final = resumen_texto[0]
+                resumen_texto = a.get('resumen_ejecutivo', ['Sin resumen disponible.'])
+                if isinstance(resumen_texto, list): resumen_final = resumen_texto[0] if resumen_texto else 'Sin resumen disponible.'
                 else: resumen_final = str(resumen_texto)
+                if not resumen_final or resumen_final.lower() in ('none', 'null', 'nan'):
+                    resumen_final = 'Sin resumen disponible.'
+
+                accion_final = a.get('accion_sugerida')
+                if not accion_final or str(accion_final).lower() in ('none', 'null', 'nan'):
+                    accion_final = 'Leer fuente original.'
 
                 st.markdown(f"""
                 <div style="background:#161b22; border-left:5px solid {color}; border-radius:8px; padding:20px; margin-bottom:20px; border:1px solid #30363d;">
@@ -336,7 +371,7 @@ else:
                         {resumen_final}
                     </div>
                     <div style="background:rgba(0,193,169,0.1); padding:12px; border-radius:6px; font-size:14px; color:#aaa; border-left: 2px solid #00c1a9;">
-                        💡 <b>Acción:</b> {a.get('accion_sugerida')}
+                        💡 <b>Acción:</b> {accion_final}
                     </div>
                     <div style="margin-top:15px; text-align:right;">
                         <a href="{n.get('url')}" target="_blank" style="color:{color}; text-decoration:none; font-weight:bold; font-size:13px;">Fuente 🔗</a>
