@@ -79,7 +79,7 @@ db = firestore.client()
 # 3. MOTOR DE DATOS (FILTRO "GRATIS" + IA)
 # ==========================================
 
-def limpiar_json(texto):␊
+def limpiar_json(texto):
     try:
         start = texto.find('{')
         end = texto.rfind('}') + 1
@@ -373,4 +373,5 @@ else:
             with c2: 
                 grp = df.groupby('departamento')['relevancia_score'].mean().reset_index()
                 st.plotly_chart(px.bar(grp, x='departamento', y='relevancia_score', color='departamento', color_discrete_map=COLORES_DEPT), use_container_width=True)
+
 
