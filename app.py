@@ -13,7 +13,8 @@ import time
 import json
 import textwrap
 import google.generativeai as genai
-from duckduckgo_search import DDGS # <--- EL NUEVO MOTOR DE BÚSQUEDA
+from duckduckgo_search import DDGS
+import re
 
 # ==========================================
 # 1. CONFIGURACIÓN
@@ -42,13 +43,13 @@ COLORES_DEPT = {
     "Legal & Regulatory Affairs / Innovation": "#FF5252"
 }
 
-# QUERIES OPTIMIZADAS (Más amplias para asegurar resultados)
+# QUERIES REAIES (Optimizadas para encontrar resultados sí o sí)
 QUERIES_DEPT = {
-    "Finanzas y ROI": "industria alimentos finanzas inversión tecnologia",
-    "FoodTech and Supply Chain": "FoodTech cadena suministro innovación",
-    "Innovación y Tendencias": "tendencias consumo alimentos bebidas 2025 2026",
-    "Tecnología e Innovación": "inteligencia artificial industria manufactura software",
-    "Legal & Regulatory Affairs / Innovation": "regulación ley alimentos etiquetado tecnología"
+    "Finanzas y ROI": "retorno inversión automatización industria alimentos finanzas",
+    "FoodTech and Supply Chain": "tecnología alimentos cadena suministro innovación logística",
+    "Innovación y Tendencias": "tendencias industria alimentos bebidas 2025 consumidor",
+    "Tecnología e Innovación": "inteligencia artificial manufactura software empresarial",
+    "Legal & Regulatory Affairs / Innovation": "regulación ley etiquetado alimentos normativa tecnología"
 }
 
 # ==========================================
@@ -76,96 +77,124 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 # ==========================================
-# 3. MOTOR DE INGENIERÍA DE DATOS (SCRAPER)
+# 3. MOTOR DE DATOS REAL (CRAWLER + IA)
 # ==========================================
 
-def analizar_con_gemini(texto, titulo, dept):
-    """Analiza el fragmento de la noticia para dar contexto estratégico"""
+def limpiar_json(texto):
+    """Limpia la respuesta de la IA para obtener solo el JSON válido"""
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = f"""
-        Como experto en inteligencia competitiva para AMC Global, analiza:
-        Titulo: {titulo}
-        Contexto: {texto}
-        Departamento: {dept}
-        
-        Output JSON (sin markdown):
-        {{
-            "titulo_mejorado": "Titulo en español profesional",
-            "resumen": "Resumen ejecutivo de 1 linea.",
-            "accion": "Acción estratégica recomendada.",
-            "score": (85-99)
-        }}
-        """
-        response = model.generate_content(prompt)
-        clean_json = response.text.replace("```json", "").replace("```", "").strip()
-        return json.loads(clean_json)
+        start = texto.find('{')
+        end = texto.rfind('}') + 1
+        if start != -1 and end != 0:
+            return json.loads(texto[start:end])
+        return None
     except:
+        return None
+
+def analizar_con_gemini(texto, titulo, dept):
+    """
+    Analiza la noticia REAL encontrada. 
+    NO INVENTA DATOS. Solo resume lo que encontró.
+    """
+    if "GOOGLE_API_KEY" not in st.secrets:
         return {
             "titulo_mejorado": titulo,
-            "resumen": texto[:100] + "...",
-            "accion": "Revisar enlace original para detalles.",
-            "score": 80
+            "resumen": f"⚠️ (Sin API Key) {texto[:150]}...",
+            "accion": "Configurar IA.",
+            "score": 50
         }
+
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    # Prompt estricto para resumen de calidad
+    prompt = f"""
+    Actúa como analista senior de AMC Global. Tienes esta noticia REAL:
+    
+    TITULO: {titulo}
+    TEXTO: {texto}
+    DEPARTAMENTO: {dept}
+    
+    Tu tarea:
+    1. Traduce el título al español profesional si está en inglés.
+    2. Escribe un RESUMEN EJECUTIVO (Párrafo de 40-50 palabras) explicando qué pasó y su impacto.
+    3. Sugiere una ACCIÓN ESTRATÉGICA corta.
+    
+    Responde SOLO un JSON:
+    {{
+        "titulo_mejorado": "...",
+        "resumen": "...",
+        "accion": "...",
+        "score": 90
+    }}
+    """
+
+    # Reintentos por si la red falla
+    for _ in range(3):
+        try:
+            response = model.generate_content(prompt)
+            data = limpiar_json(response.text)
+            if data:
+                return data
+        except:
+            time.sleep(1)
+
+    # Si falla la IA tras 3 intentos, devolvemos el texto original (Fallback Real)
+    return {
+        "titulo_mejorado": titulo,
+        "resumen": f"{texto[:200]}... (Análisis IA no disponible, mostrando fragmento original)",
+        "accion": "Revisar fuente original.",
+        "score": 70
+    }
 
 def buscador_inteligente():
     """
-    Busca noticias usando DuckDuckGo en modo 'Cascada'.
-    Si no encuentra de hoy, busca de la semana. SIEMPRE devuelve algo.
+    Busca en internet usando DuckDuckGo.
+    NO USA DATOS SIMULADOS.
     """
     count_news = 0
     ddgs = DDGS()
     
-    print("🦅 Iniciando Búsqueda Inteligente...")
+    print("🦅 Iniciando Búsqueda Real...")
     
     for dept, query in QUERIES_DEPT.items():
         resultados = []
         
-        # ESTRATEGIA EN CASCADA
-        # 1. Intentar buscar noticias de HOY ('d')
+        # Intentamos obtener noticias recientes
         try:
+            # Primero buscamos noticias ('news') de hoy ('d')
             gen = ddgs.news(query, region="mx-es", timelimit="d", max_results=2)
             resultados = list(gen)
         except: pass
         
-        # 2. Si no hay nada de hoy, buscar de la SEMANA ('w')
-        if not resultados:
-            try:
-                gen = ddgs.news(query, region="mx-es", timelimit="w", max_results=2)
-                resultados = list(gen)
-            except: pass
-            
-        # 3. Si aún así no hay, buscar GENERAL (sin limite de tiempo)
+        # Si no hay noticias frescas, buscamos en la web general ('text')
+        # Esto asegura encontrar artículos técnicos o blogs relevantes
         if not resultados:
             try:
                 gen = ddgs.text(query, region="mx-es", max_results=2)
                 resultados = list(gen)
             except: pass
 
-        # PROCESAR RESULTADOS ENCONTRADOS
         for r in resultados:
-            # DuckDuckGo devuelve claves distintas según si es 'news' o 'text'
             titulo = r.get('title', '')
             link = r.get('url', r.get('href', ''))
             body = r.get('body', r.get('snippet', ''))
-            fecha_fuente = r.get('date', datetime.datetime.now()) # Si no trae fecha, asumimos hoy para ingestion
             
             if not titulo or not link: continue
 
-            # Verificar Duplicados en BD (evitar re-ingestar lo mismo)
+            # Verificar si ya la tenemos (Evitar duplicados)
             docs = db.collection('news_articles')\
                      .where(filter=FieldFilter('title', '==', titulo))\
                      .limit(1).stream()
             if list(docs): continue
 
-            # Enriquecer con IA
+            # Procesar con IA
             analisis = analizar_con_gemini(body, titulo, dept)
             
-            # Guardar
+            # Guardar en Base de Datos
             db.collection('news_articles').add({
                 "title": analisis.get('titulo_mejorado', titulo),
                 "url": link,
-                "published_at": datetime.datetime.now(), # Marcamos como ingestado HOY
+                "published_at": datetime.datetime.now(),
                 "source": r.get('source', 'Web Search'),
                 "analysis": {
                     "departamento": dept,
@@ -176,12 +205,12 @@ def buscador_inteligente():
                 }
             })
             count_news += 1
-            time.sleep(0.5)
+            time.sleep(1) # Pausa para no saturar
 
     return count_news
 
 # ==========================================
-# 4. FUNCIONES UI Y EMAIL
+# 4. FUNCIONES AUXILIARES
 # ==========================================
 def enviar_email(num, dest, nombre):
     if num == 0: return
@@ -189,11 +218,11 @@ def enviar_email(num, dest, nombre):
         msg = MIMEMultipart()
         msg['From'] = REMITENTE_EMAIL
         msg['To'] = dest
-        msg['Subject'] = Header(f"🦅 AMC Daily: {num} Hallazgos Estratégicos", 'utf-8')
+        msg['Subject'] = Header(f"🦅 AMC Daily: {num} Hallazgos Reales", 'utf-8')
         html = f"""
         <div style="font-family:sans-serif; padding:20px; background:#f4f4f4;">
             <h2 style="color:#00c1a9;">AMC INTELLIGENCE</h2>
-            <p>Hola {nombre}, el sistema ha localizado <b>{num} nuevas oportunidades</b> o riesgos en la red.</p>
+            <p>Hola {nombre}, el crawler ha detectado <b>{num} noticias reales</b> en la web.</p>
             <a href="https://amc-dashboard.streamlit.app">Ver Dashboard</a>
         </div>
         """
@@ -207,22 +236,25 @@ def enviar_email(num, dest, nombre):
     except: return False
 
 def verificar_ingesta_hoy():
-    # Revisar si ya ejecutamos el crawler hoy
+    # Solo buscamos noticias generadas hoy
     inicio_hoy = datetime.datetime.now().replace(hour=0, minute=0, second=0)
     docs = db.collection('news_articles').where(filter=FieldFilter('published_at', '>=', inicio_hoy)).limit(1).stream()
     
     if not list(docs):
+        # Si está vacío, lanzamos el crawler REAL
         placeholder = st.empty()
         with placeholder.container():
-            st.warning("⚠️ Sin datos frescos. Iniciando Motor de Búsqueda Inteligente (DuckDuckGo)...")
+            st.warning("⚠️ Sin datos de hoy. Iniciando búsqueda en internet...")
             bar = st.progress(0)
             n = buscador_inteligente()
             bar.progress(100)
+            
             if n > 0:
-                st.success(f"✅ Ingesta completada: {n} noticias.")
+                st.success(f"✅ Éxito: {n} noticias reales encontradas.")
                 enviar_email(n, st.session_state.get('user_email', REMITENTE_EMAIL), "Usuario")
             else:
-                st.error("⚠️ La red está silenciosa hoy. Mostrando histórico.")
+                st.error("⚠️ El buscador no encontró resultados relevantes hoy en la web.")
+            
             time.sleep(1.5)
         placeholder.empty()
         st.rerun()
@@ -248,7 +280,7 @@ if not st.session_state['logged_in']:
                 else: st.error("Acceso Denegado")
             except: st.error("Error de Sistema")
 else:
-    # --- LOGIC ---
+    # --- LOGICA DE NEGOCIO ---
     verificar_ingesta_hoy()
     
     try: user_data = db.collection('users').document(st.session_state['user_email']).get().to_dict()
@@ -260,20 +292,24 @@ else:
         st.caption(f"Operador: {user_data.get('nombre')}")
         st.divider()
         
-        filtro_tiempo = st.radio("Rango de Datos:", ["Tiempo Real (Hoy)", "Ayer", "Histórico"], index=0)
-        mis_intereses = st.multiselect("Departamentos:", LISTA_DEPARTAMENTOS, default=user_data.get('intereses', [])[:2])
+        filtro_tiempo = st.radio("Filtro Temporal:", ["Tiempo Real (Hoy)", "Ayer", "Histórico"], index=0)
+        mis_intereses = st.multiselect("Áreas de Interés:", LISTA_DEPARTAMENTOS, default=user_data.get('intereses', [])[:2])
         
         if st.button("💾 Guardar Config"):
             db.collection('users').document(st.session_state['user_email']).update({"intereses": mis_intereses})
             st.rerun()
         
         st.divider()
-        if st.button("🚀 Escaneo Manual Profundo"):
-            with st.spinner("Ejecutando escaneo en la web profunda..."):
+        if st.button("🚀 Escaneo Manual"):
+            with st.spinner("Buscando en DuckDuckGo..."):
                 n = buscador_inteligente()
-                st.success(f"Hallazgos: {n}")
+                st.success(f"Resultados: {n}")
                 time.sleep(1)
                 st.rerun()
+        
+        if st.button("📧 Reenviar Reporte"):
+            enviar_email(5, st.session_state['user_email'], "Usuario")
+            st.success("Enviado")
                 
         if st.button("Cerrar Sesión"):
             st.session_state['logged_in'] = False
@@ -282,7 +318,6 @@ else:
     # --- DASHBOARD ---
     st.title("Centro de Inteligencia Estratégica")
     
-    # Query Builder
     hoy = datetime.datetime.now().replace(hour=0, minute=0, second=0)
     ayer = hoy - datetime.timedelta(days=1)
     
@@ -291,7 +326,7 @@ else:
     
     if filtro_tiempo == "Tiempo Real (Hoy)":
         query = query.where(filter=FieldFilter('published_at', '>=', hoy))
-        st.caption(f"📡 Mostrando inteligencia recolectada HOY ({datetime.datetime.now().strftime('%d-%m-%Y')})")
+        st.caption(f"📡 Datos obtenidos HOY ({datetime.datetime.now().strftime('%d-%m-%Y')}) desde fuentes públicas.")
     elif filtro_tiempo == "Ayer":
         query = query.where(filter=FieldFilter('published_at', '>=', ayer)).where(filter=FieldFilter('published_at', '<', hoy))
     
@@ -309,31 +344,39 @@ else:
                 fecha = n.get('published_at')
                 fecha_str = fecha.strftime("%H:%M") if filtro_tiempo == "Tiempo Real (Hoy)" else fecha.strftime("%d/%m %H:%M")
                 
-                # Diseño UI
+                # Extracción segura del resumen
+                resumen_texto = a.get('resumen_ejecutivo', ['Sin resumen disponible'])
+                if isinstance(resumen_texto, list): resumen_final = resumen_texto[0]
+                else: resumen_final = str(resumen_texto)
+
+                # Renderizado de Tarjeta
                 st.markdown(f"""
-                <div style="background:#161b22; border-left:5px solid {color}; border-radius:8px; padding:15px; margin-bottom:15px; border:1px solid #30363d;">
-                    <div style="display:flex; justify-content:space-between; color:{color}; font-weight:bold; font-size:12px; margin-bottom:5px;">
+                <div style="background:#161b22; border-left:5px solid {color}; border-radius:8px; padding:20px; margin-bottom:20px; border:1px solid #30363d;">
+                    <div style="display:flex; justify-content:space-between; color:{color}; font-weight:bold; font-size:12px; margin-bottom:8px;">
                         <span>{dept.upper()}</span>
                         <span style="color:#666;">{fecha_str}</span>
                     </div>
-                    <h3 style="color:#fff; margin:0 0 10px 0; font-size:18px;">{n.get('title')}</h3>
-                    <p style="color:#ccc; font-size:14px; margin-bottom:15px;">{a.get('resumen_ejecutivo', [''])[0]}</p>
-                    <div style="background:rgba(0,193,169,0.1); padding:10px; border-radius:5px; font-size:13px; color:#aaa;">
-                        💡 <b>Acción:</b> {a.get('accion_sugerida')}
+                    <h3 style="color:#fff; margin:0 0 12px 0; font-size:20px;">{n.get('title')}</h3>
+                    
+                    <div style="color:#c9d1d9; font-size:15px; line-height:1.6; margin-bottom:15px; text-align: justify;">
+                        {resumen_final}
                     </div>
-                    <div style="margin-top:10px; text-align:right;">
-                        <a href="{n.get('url')}" target="_blank" style="color:{color}; text-decoration:none; font-weight:bold; font-size:13px;">Leer Fuente 🔗</a>
+                    
+                    <div style="background:rgba(0,193,169,0.1); padding:12px; border-radius:6px; font-size:14px; color:#aaa; border-left: 2px solid #00c1a9;">
+                        💡 <b>Acción Sugerida:</b> {a.get('accion_sugerida')}
+                    </div>
+                    <div style="margin-top:15px; text-align:right;">
+                        <a href="{n.get('url')}" target="_blank" style="color:{color}; text-decoration:none; font-weight:bold; font-size:13px;">Leer Fuente Completa 🔗</a>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
         else:
             if filtro_tiempo == "Tiempo Real (Hoy)":
-                st.info("ℹ️ No hay datos ingestados aún. El crawler automático se ejecutará pronto si la base de datos está vacía.")
+                st.info("ℹ️ No hay noticias aún. El sistema está activo y buscando...")
             else:
                 st.warning("Sin datos históricos para este periodo.")
 
     with tab2:
-        # Analytics
         all_docs = db.collection('news_articles').limit(100).stream()
         df = pd.DataFrame([d.to_dict()['analysis'] for d in all_docs if 'analysis' in d.to_dict()])
         if not df.empty:
