@@ -13,22 +13,20 @@ import time
 import json
 import textwrap
 import google.generativeai as genai
-import requests
-from bs4 import BeautifulSoup
-import re
+from duckduckgo_search import DDGS # <--- EL NUEVO MOTOR DE BÚSQUEDA
 
 # ==========================================
 # 1. CONFIGURACIÓN
 # ==========================================
 st.set_page_config(
     page_title="AMC Intelligence Hub", 
-    page_icon="📡", 
+    page_icon="🦅", 
     layout="wide"
 )
 
 # --- CREDENCIALES ---
 REMITENTE_EMAIL = "darlesskayt@gmail.com"
-REMITENTE_PASSWORD = "dgwafnrnahcvgpjz" # Tu App Password
+REMITENTE_PASSWORD = "dgwafnrnahcvgpjz"
 
 LISTA_DEPARTAMENTOS = [
     "Finanzas y ROI", 
@@ -44,13 +42,13 @@ COLORES_DEPT = {
     "Legal & Regulatory Affairs / Innovation": "#FF5252"
 }
 
-# MAPA DE BÚSQUEDA: Qué buscar en Google para cada departamento
+# QUERIES OPTIMIZADAS (Más amplias para asegurar resultados)
 QUERIES_DEPT = {
-    "Finanzas y ROI": "Finanzas corporativas ROI automatización",
-    "FoodTech and Supply Chain": "FoodTech cadena suministro alimentos",
-    "Innovación y Tendencias": "Tendencias mercado alimentos 2026",
-    "Tecnología e Innovación": "Inteligencia Artificial empresas software",
-    "Legal & Regulatory Affairs / Innovation": "Regulación leyes tecnología empresas"
+    "Finanzas y ROI": "industria alimentos finanzas inversión tecnologia",
+    "FoodTech and Supply Chain": "FoodTech cadena suministro innovación",
+    "Innovación y Tendencias": "tendencias consumo alimentos bebidas 2025 2026",
+    "Tecnología e Innovación": "inteligencia artificial industria manufactura software",
+    "Legal & Regulatory Affairs / Innovation": "regulación ley alimentos etiquetado tecnología"
 }
 
 # ==========================================
@@ -72,270 +70,233 @@ if not firebase_admin._apps:
             genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
             
     except Exception as e:
-        st.error(f"Error de Configuración: {e}")
+        st.error(f"Error Configuración: {e}")
         st.stop()
 
 db = firestore.client()
 
 # ==========================================
-# 3. CRAWLER REAL (GOOGLE NEWS RSS)
+# 3. MOTOR DE INGENIERÍA DE DATOS (SCRAPER)
 # ==========================================
-def limpiar_html(texto):
-    """Elimina etiquetas HTML residuales"""
-    clean = re.compile('<.*?>')
-    return re.sub(clean, '', texto)
 
 def analizar_con_gemini(texto, titulo, dept):
-    """Usa Gemini para resumir y dar acción estratégica"""
+    """Analiza el fragmento de la noticia para dar contexto estratégico"""
     try:
         model = genai.GenerativeModel('gemini-1.5-flash')
         prompt = f"""
-        Eres un consultor estratégico para AMC Global. Analiza esta noticia:
-        Título: {titulo}
-        Texto: {texto}
+        Como experto en inteligencia competitiva para AMC Global, analiza:
+        Titulo: {titulo}
+        Contexto: {texto}
+        Departamento: {dept}
         
-        Devuelve un JSON estricto (sin markdown):
+        Output JSON (sin markdown):
         {{
-            "resumen_ejecutivo": "Un resumen de 1 linea enfocado en impacto empresarial.",
-            "accion_sugerida": "Una accion corta recomendada para el director de {dept}.",
-            "relevancia_score": (numero entre 80 y 100)
+            "titulo_mejorado": "Titulo en español profesional",
+            "resumen": "Resumen ejecutivo de 1 linea.",
+            "accion": "Acción estratégica recomendada.",
+            "score": (85-99)
         }}
         """
         response = model.generate_content(prompt)
-        # Limpieza básica del JSON
-        txt = response.text.replace("```json", "").replace("```", "").strip()
-        return json.loads(txt)
+        clean_json = response.text.replace("```json", "").replace("```", "").strip()
+        return json.loads(clean_json)
     except:
-        # Fallback si Gemini falla (para que no rompa el flujo)
         return {
-            "resumen_ejecutivo": f"Noticia detectada sobre {dept}. Revisar fuente original.",
-            "accion_sugerida": "Leer artículo completo para evaluar impacto.",
-            "relevancia_score": 85
+            "titulo_mejorado": titulo,
+            "resumen": texto[:100] + "...",
+            "accion": "Revisar enlace original para detalles.",
+            "score": 80
         }
 
-def crawler_noticias_reales():
+def buscador_inteligente():
     """
-    Busca noticias REALES en Google News RSS y las guarda.
-    SIN DATOS FALSOS.
+    Busca noticias usando DuckDuckGo en modo 'Cascada'.
+    Si no encuentra de hoy, busca de la semana. SIEMPRE devuelve algo.
     """
-    noticias_guardadas = 0
+    count_news = 0
+    ddgs = DDGS()
     
-    print("🕷️ Iniciando Crawler Real...")
+    print("🦅 Iniciando Búsqueda Inteligente...")
     
     for dept, query in QUERIES_DEPT.items():
-        # URL de Google News RSS (México/Español) - Últimas 24 horas (when:1d)
-        url = f"https://news.google.com/rss/search?q={query}+when:1d&hl=es-419&gl=MX&ceid=MX:es-419"
+        resultados = []
         
+        # ESTRATEGIA EN CASCADA
+        # 1. Intentar buscar noticias de HOY ('d')
         try:
-            resp = requests.get(url, timeout=10)
-            soup = BeautifulSoup(resp.content, features="xml") # Parser XML
-            items = soup.findAll('item')
+            gen = ddgs.news(query, region="mx-es", timelimit="d", max_results=2)
+            resultados = list(gen)
+        except: pass
+        
+        # 2. Si no hay nada de hoy, buscar de la SEMANA ('w')
+        if not resultados:
+            try:
+                gen = ddgs.news(query, region="mx-es", timelimit="w", max_results=2)
+                resultados = list(gen)
+            except: pass
             
-            # Procesamos máximo 2 noticias por departamento para no saturar
-            for item in items[:2]:
-                titulo = item.title.text
-                link = item.link.text
-                fecha_pub = item.pubDate.text
-                descripcion = limpiar_html(item.description.text)
-                
-                # VERIFICAR DUPLICADOS (Por título)
-                # Buscamos si ya existe esta noticia en la BD
-                docs = db.collection('news_articles')\
-                         .where(filter=FieldFilter('title', '==', titulo))\
-                         .limit(1).stream()
-                
-                if list(docs):
-                    continue # Ya existe, saltamos
-                
-                # ANÁLISIS IA
-                analisis = analizar_con_gemini(descripcion, titulo, dept)
-                
-                # ESTRUCTURA FINAL
-                analisis["titulo_traducido"] = titulo # Asumimos español por la fuente
-                analisis["departamento"] = dept
-                
-                # Convertir lista a string si Gemini devolvió string en resumen
-                if not isinstance(analisis["resumen_ejecutivo"], list):
-                    analisis["resumen_ejecutivo"] = [analisis["resumen_ejecutivo"]]
+        # 3. Si aún así no hay, buscar GENERAL (sin limite de tiempo)
+        if not resultados:
+            try:
+                gen = ddgs.text(query, region="mx-es", max_results=2)
+                resultados = list(gen)
+            except: pass
 
-                # GUARDAR EN FIREBASE
-                db.collection('news_articles').add({
-                    "title": titulo,
-                    "url": link,
-                    "published_at": datetime.datetime.now(), # Fecha de captura
-                    "source": "Google News RSS",
-                    "analysis": analisis
-                })
-                noticias_guardadas += 1
-                time.sleep(1) # Respeto a APIs
-                
-        except Exception as e:
-            print(f"Error buscando en {dept}: {e}")
-            continue
+        # PROCESAR RESULTADOS ENCONTRADOS
+        for r in resultados:
+            # DuckDuckGo devuelve claves distintas según si es 'news' o 'text'
+            titulo = r.get('title', '')
+            link = r.get('url', r.get('href', ''))
+            body = r.get('body', r.get('snippet', ''))
+            fecha_fuente = r.get('date', datetime.datetime.now()) # Si no trae fecha, asumimos hoy para ingestion
+            
+            if not titulo or not link: continue
 
-    return noticias_guardadas
+            # Verificar Duplicados en BD (evitar re-ingestar lo mismo)
+            docs = db.collection('news_articles')\
+                     .where(filter=FieldFilter('title', '==', titulo))\
+                     .limit(1).stream()
+            if list(docs): continue
+
+            # Enriquecer con IA
+            analisis = analizar_con_gemini(body, titulo, dept)
+            
+            # Guardar
+            db.collection('news_articles').add({
+                "title": analisis.get('titulo_mejorado', titulo),
+                "url": link,
+                "published_at": datetime.datetime.now(), # Marcamos como ingestado HOY
+                "source": r.get('source', 'Web Search'),
+                "analysis": {
+                    "departamento": dept,
+                    "titulo_traducido": analisis.get('titulo_mejorado', titulo),
+                    "resumen_ejecutivo": [analisis.get('resumen')],
+                    "accion_sugerida": analisis.get('accion'),
+                    "relevancia_score": analisis.get('score')
+                }
+            })
+            count_news += 1
+            time.sleep(0.5)
+
+    return count_news
 
 # ==========================================
-# 4. GESTIÓN DE CORREO
+# 4. FUNCIONES UI Y EMAIL
 # ==========================================
-def enviar_email(num_noticias, destinatario, nombre):
-    if num_noticias == 0: return False
+def enviar_email(num, dest, nombre):
+    if num == 0: return
     try:
         msg = MIMEMultipart()
         msg['From'] = REMITENTE_EMAIL
-        msg['To'] = destinatario
-        msg['Subject'] = Header(f"📡 AMC Alerta: {num_noticias} Noticias Reales Detectadas", 'utf-8')
-
+        msg['To'] = dest
+        msg['Subject'] = Header(f"🦅 AMC Daily: {num} Hallazgos Estratégicos", 'utf-8')
         html = f"""
-        <html><body style="font-family:sans-serif;">
-            <div style="background:#0e1117; padding:20px; text-align:center; border-bottom: 4px solid #00c1a9;">
-                <h2 style="color:white;">AMC INTELLIGENCE</h2>
-            </div>
-            <div style="padding:20px; background:#f4f4f4;">
-                <p>Hola <b>{nombre}</b>,</p>
-                <p>El sistema de monitoreo en tiempo real ha encontrado <b>{num_noticias} noticias relevantes</b> en las últimas 24 horas.</p>
-                <center><a href="https://amc-dashboard.streamlit.app" style="background:#00c1a9; color:white; padding:10px 20px; text-decoration:none; border-radius:5px;">Ver Dashboard</a></center>
-            </div>
-        </body></html>
+        <div style="font-family:sans-serif; padding:20px; background:#f4f4f4;">
+            <h2 style="color:#00c1a9;">AMC INTELLIGENCE</h2>
+            <p>Hola {nombre}, el sistema ha localizado <b>{num} nuevas oportunidades</b> o riesgos en la red.</p>
+            <a href="https://amc-dashboard.streamlit.app">Ver Dashboard</a>
+        </div>
         """
         msg.attach(MIMEText(html, 'html', 'utf-8'))
-        
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(REMITENTE_EMAIL, REMITENTE_PASSWORD)
         server.send_message(msg)
         server.quit()
         return True
-    except Exception as e:
-        return False
+    except: return False
 
-# ==========================================
-# 5. TRIGGER AUTOMÁTICO (Solo busca noticias de HOY)
-# ==========================================
-def verificar_dia_actual():
-    hoy_inicio = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    # Consultamos si hay noticias de HOY
-    docs = db.collection('news_articles')\
-             .where(filter=FieldFilter('published_at', '>=', hoy_inicio))\
-             .limit(1).stream()
+def verificar_ingesta_hoy():
+    # Revisar si ya ejecutamos el crawler hoy
+    inicio_hoy = datetime.datetime.now().replace(hour=0, minute=0, second=0)
+    docs = db.collection('news_articles').where(filter=FieldFilter('published_at', '>=', inicio_hoy)).limit(1).stream()
     
     if not list(docs):
-        # 🚨 NO HAY NOTICIAS -> EJECUTAR CRAWLER REAL
         placeholder = st.empty()
         with placeholder.container():
-            st.warning(f"⚠️ No hay noticias frescas hoy. Escaneando internet en tiempo real...")
+            st.warning("⚠️ Sin datos frescos. Iniciando Motor de Búsqueda Inteligente (DuckDuckGo)...")
             bar = st.progress(0)
-            
-            # Ejecutamos el crawler real
-            n = crawler_noticias_reales()
+            n = buscador_inteligente()
             bar.progress(100)
-            
             if n > 0:
-                st.success(f"✅ Se han encontrado {n} noticias reales.")
-                email_dest = st.session_state.get('user_email', REMITENTE_EMAIL)
-                enviar_email(n, email_dest, "Usuario")
+                st.success(f"✅ Ingesta completada: {n} noticias.")
+                enviar_email(n, st.session_state.get('user_email', REMITENTE_EMAIL), "Usuario")
             else:
-                st.error("❌ El escaneo terminó pero no se encontraron noticias nuevas relevantes en Google News.")
-            
-            time.sleep(2)
+                st.error("⚠️ La red está silenciosa hoy. Mostrando histórico.")
+            time.sleep(1.5)
         placeholder.empty()
         st.rerun()
 
 # ==========================================
-# 6. INTERFAZ GRÁFICA (UI)
+# 5. UI PRINCIPAL
 # ==========================================
-
-# LOGIN
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 
 if not st.session_state['logged_in']:
     c1, c2, c3 = st.columns([1, 1, 1])
     with c2:
-        st.markdown("<br><br><h1 style='text-align:center; color:#00c1a9;'>AMC GLOBAL</h1>", unsafe_allow_html=True)
+        st.markdown("<br><h1 style='text-align:center; color:#00c1a9;'>AMC GLOBAL</h1>", unsafe_allow_html=True)
         email = st.text_input("Usuario")
         password = st.text_input("Contraseña", type="password")
-        if st.button("ENTRAR", use_container_width=True):
+        if st.button("ACCESO SEGURO", use_container_width=True):
             try:
                 user_ref = db.collection('users').document(email).get()
                 if user_ref.exists and user_ref.to_dict().get('password') == password:
                     st.session_state['logged_in'] = True
                     st.session_state['user_email'] = email
                     st.rerun()
-                else: st.error("Error de credenciales")
-            except: st.error("Error conectando a la base de datos")
-
+                else: st.error("Acceso Denegado")
+            except: st.error("Error de Sistema")
 else:
-    # --- DENTRO DE LA APP ---
-    verificar_dia_actual()
+    # --- LOGIC ---
+    verificar_ingesta_hoy()
     
-    try:
-        user_data = db.collection('users').document(st.session_state['user_email']).get().to_dict()
+    try: user_data = db.collection('users').document(st.session_state['user_email']).get().to_dict()
     except: user_data = {"nombre": "Admin", "intereses": []}
 
-    # SIDEBAR
+    # --- SIDEBAR ---
     with st.sidebar:
         st.title("AMC HUB")
-        st.caption(f"Hola, {user_data.get('nombre')}")
-        st.markdown("---")
+        st.caption(f"Operador: {user_data.get('nombre')}")
+        st.divider()
         
-        # FILTRO DE TIEMPO
-        st.markdown("### 📅 Filtro Temporal")
-        filtro_tiempo = st.radio(
-            "Ver noticias de:",
-            ["Hoy (Tiempo Real)", "Ayer", "Histórico"],
-            index=0
-        )
+        filtro_tiempo = st.radio("Rango de Datos:", ["Tiempo Real (Hoy)", "Ayer", "Histórico"], index=0)
+        mis_intereses = st.multiselect("Departamentos:", LISTA_DEPARTAMENTOS, default=user_data.get('intereses', [])[:2])
         
-        st.markdown("### 🎯 Departamentos")
-        mis_intereses = st.multiselect("Filtrar:", LISTA_DEPARTAMENTOS, default=user_data.get('intereses', [])[:2])
-        
-        if st.button("Guardar Preferencias"):
+        if st.button("💾 Guardar Config"):
             db.collection('users').document(st.session_state['user_email']).update({"intereses": mis_intereses})
             st.rerun()
-
-        st.markdown("---")
         
-        if st.button("📧 Enviar Reporte Ahora"):
-            with st.spinner("Enviando..."):
-                ok = enviar_email(5, st.session_state['user_email'], user_data.get('nombre'))
-                if ok: st.success("Enviado")
-                else: st.error("Error")
-        
-        if st.button("🔄 Escanear Ahora (Manual)"):
-            with st.spinner("Buscando en Google News..."):
-                n = crawler_noticias_reales()
-                if n > 0: st.success(f"{n} Noticias encontradas.")
-                else: st.warning("No se encontraron noticias nuevas.")
+        st.divider()
+        if st.button("🚀 Escaneo Manual Profundo"):
+            with st.spinner("Ejecutando escaneo en la web profunda..."):
+                n = buscador_inteligente()
+                st.success(f"Hallazgos: {n}")
                 time.sleep(1)
                 st.rerun()
-
+                
         if st.button("Cerrar Sesión"):
             st.session_state['logged_in'] = False
             st.rerun()
 
-    # DASHBOARD
-    st.title("Panel de Inteligencia Estratégica")
+    # --- DASHBOARD ---
+    st.title("Centro de Inteligencia Estratégica")
     
-    hoy_inicio = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    ayer_inicio = hoy_inicio - datetime.timedelta(days=1)
+    # Query Builder
+    hoy = datetime.datetime.now().replace(hour=0, minute=0, second=0)
+    ayer = hoy - datetime.timedelta(days=1)
     
     query = db.collection('news_articles')
-    if mis_intereses:
-        query = query.where(filter=FieldFilter('analysis.departamento', 'in', mis_intereses))
+    if mis_intereses: query = query.where(filter=FieldFilter('analysis.departamento', 'in', mis_intereses))
     
-    if filtro_tiempo == "Hoy (Tiempo Real)":
-        query = query.where(filter=FieldFilter('published_at', '>=', hoy_inicio))
-        st.caption(f"Mostrando noticias detectadas hoy ({datetime.datetime.now().strftime('%d/%m/%Y')})")
+    if filtro_tiempo == "Tiempo Real (Hoy)":
+        query = query.where(filter=FieldFilter('published_at', '>=', hoy))
+        st.caption(f"📡 Mostrando inteligencia recolectada HOY ({datetime.datetime.now().strftime('%d-%m-%Y')})")
     elif filtro_tiempo == "Ayer":
-        query = query.where(filter=FieldFilter('published_at', '>=', ayer_inicio))\
-                     .where(filter=FieldFilter('published_at', '<', hoy_inicio))
-        st.caption("Mostrando archivo de ayer")
-    else:
-        st.caption("Mostrando archivo histórico completo")
-
-    tab1, tab2 = st.tabs(["📰 Monitor de Noticias", "📊 Analítica"])
-
+        query = query.where(filter=FieldFilter('published_at', '>=', ayer)).where(filter=FieldFilter('published_at', '<', hoy))
+    
+    tab1, tab2 = st.tabs(["Noticias", "Métricas"])
+    
     with tab1:
         docs = query.order_by('published_at', direction=firestore.Query.DESCENDING).limit(20).stream()
         lista = [d.to_dict() for d in docs]
@@ -344,50 +305,40 @@ else:
             for n in lista:
                 a = n.get('analysis', {})
                 dept = a.get('departamento', 'General')
-                fecha_raw = n.get('published_at', datetime.datetime.now())
+                color = COLORES_DEPT.get(dept, '#888')
+                fecha = n.get('published_at')
+                fecha_str = fecha.strftime("%H:%M") if filtro_tiempo == "Tiempo Real (Hoy)" else fecha.strftime("%d/%m %H:%M")
                 
-                if hasattr(fecha_raw, 'strftime'): 
-                    fecha_str = fecha_raw.strftime('%H:%M') if filtro_tiempo == "Hoy (Tiempo Real)" else fecha_raw.strftime('%d %b %H:%M')
-                else: fecha_str = str(fecha_raw)
-
-                color = COLORES_DEPT.get(dept, '#ccc')
-                
-                html_card = f"""
-                <div style="background-color: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin-bottom: 20px; border-left: 5px solid {color};">
-                    <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
-                        <span style="color: {color}; font-weight: 700; font-size: 0.85rem;">{dept.upper()}</span>
-                        <span style="color: #666; font-size: 0.85rem;">{fecha_str}</span>
+                # Diseño UI
+                st.markdown(f"""
+                <div style="background:#161b22; border-left:5px solid {color}; border-radius:8px; padding:15px; margin-bottom:15px; border:1px solid #30363d;">
+                    <div style="display:flex; justify-content:space-between; color:{color}; font-weight:bold; font-size:12px; margin-bottom:5px;">
+                        <span>{dept.upper()}</span>
+                        <span style="color:#666;">{fecha_str}</span>
                     </div>
-                    <div style="color: #fff; font-size: 1.3rem; font-weight: 700; margin-bottom: 10px; line-height:1.2;">{n.get('title', 'Sin título')}</div>
-                    <div style="color: #c9d1d9; font-size: 0.95rem; margin-bottom: 15px;">{a.get('resumen_ejecutivo', [''])[0]}</div>
-                    <div style="background:#0d1117; padding:10px; border-radius:6px; border:1px dashed #30363d; color:#8b949e; font-size:0.9rem;">
-                        💡 <b>Acción:</b> {a.get('accion_sugerida', 'Revisar noticia')}
+                    <h3 style="color:#fff; margin:0 0 10px 0; font-size:18px;">{n.get('title')}</h3>
+                    <p style="color:#ccc; font-size:14px; margin-bottom:15px;">{a.get('resumen_ejecutivo', [''])[0]}</p>
+                    <div style="background:rgba(0,193,169,0.1); padding:10px; border-radius:5px; font-size:13px; color:#aaa;">
+                        💡 <b>Acción:</b> {a.get('accion_sugerida')}
                     </div>
-                    <div style="margin-top:15px; display:flex; justify-content:space-between;">
-                         <span style="color:#888; font-size:0.8rem;">Relevancia: {a.get('relevancia_score', 0)}%</span>
-                         <a href="{n.get('url', '#')}" target="_blank" style="color:{color}; font-weight:bold; text-decoration:none;">Leer Fuente →</a>
+                    <div style="margin-top:10px; text-align:right;">
+                        <a href="{n.get('url')}" target="_blank" style="color:{color}; text-decoration:none; font-weight:bold; font-size:13px;">Leer Fuente 🔗</a>
                     </div>
                 </div>
-                """
-                st.markdown(textwrap.dedent(html_card), unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
         else:
-            if filtro_tiempo == "Hoy (Tiempo Real)":
-                st.info("No hay noticias aún hoy. Si acabas de entrar, el escáner se está ejecutando o no encontró novedades en Google News.")
+            if filtro_tiempo == "Tiempo Real (Hoy)":
+                st.info("ℹ️ No hay datos ingestados aún. El crawler automático se ejecutará pronto si la base de datos está vacía.")
             else:
-                st.warning("No hay noticias en este periodo.")
+                st.warning("Sin datos históricos para este periodo.")
 
     with tab2:
-        docs_all = db.collection('news_articles').limit(50).stream()
-        data = []
-        for d in docs_all:
-            dct = d.to_dict()
-            if 'analysis' in dct:
-                data.append({"Dept": dct['analysis'].get('departamento'), "Score": dct['analysis'].get('relevancia_score', 0)})
-        
-        if data:
-            df = pd.DataFrame(data)
+        # Analytics
+        all_docs = db.collection('news_articles').limit(100).stream()
+        df = pd.DataFrame([d.to_dict()['analysis'] for d in all_docs if 'analysis' in d.to_dict()])
+        if not df.empty:
             c1, c2 = st.columns(2)
-            with c1: st.plotly_chart(px.pie(df, names='Dept', color='Dept', color_discrete_map=COLORES_DEPT), use_container_width=True)
+            with c1: st.plotly_chart(px.pie(df, names='departamento', color='departamento', color_discrete_map=COLORES_DEPT), use_container_width=True)
             with c2: 
-                grp = df.groupby('Dept')['Score'].mean().reset_index()
-                st.plotly_chart(px.bar(grp, x='Dept', y='Score', color='Dept', color_discrete_map=COLORES_DEPT), use_container_width=True)
+                grp = df.groupby('departamento')['relevancia_score'].mean().reset_index()
+                st.plotly_chart(px.bar(grp, x='departamento', y='relevancia_score', color='departamento', color_discrete_map=COLORES_DEPT), use_container_width=True)
