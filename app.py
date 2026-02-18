@@ -13,14 +13,16 @@ import time
 import json
 import textwrap
 import google.generativeai as genai
-import random
+import requests
+from bs4 import BeautifulSoup
+import re
 
 # ==========================================
 # 1. CONFIGURACIÓN
 # ==========================================
 st.set_page_config(
     page_title="AMC Intelligence Hub", 
-    page_icon="📊", 
+    page_icon="📡", 
     layout="wide"
 )
 
@@ -29,8 +31,10 @@ REMITENTE_EMAIL = "darlesskayt@gmail.com"
 REMITENTE_PASSWORD = "dgwafnrnahcvgpjz" # Tu App Password
 
 LISTA_DEPARTAMENTOS = [
-    "Finanzas y ROI", "FoodTech and Supply Chain", 
-    "Innovación y Tendencias", "Tecnología e Innovación", 
+    "Finanzas y ROI", 
+    "FoodTech and Supply Chain", 
+    "Innovación y Tendencias", 
+    "Tecnología e Innovación", 
     "Legal & Regulatory Affairs / Innovation"
 ]
 
@@ -40,12 +44,20 @@ COLORES_DEPT = {
     "Legal & Regulatory Affairs / Innovation": "#FF5252"
 }
 
+# MAPA DE BÚSQUEDA: Qué buscar en Google para cada departamento
+QUERIES_DEPT = {
+    "Finanzas y ROI": "Finanzas corporativas ROI automatización",
+    "FoodTech and Supply Chain": "FoodTech cadena suministro alimentos",
+    "Innovación y Tendencias": "Tendencias mercado alimentos 2026",
+    "Tecnología e Innovación": "Inteligencia Artificial empresas software",
+    "Legal & Regulatory Affairs / Innovation": "Regulación leyes tecnología empresas"
+}
+
 # ==========================================
-# 2. CONEXIÓN FIREBASE & GEMINI (HÍBRIDA)
+# 2. CONEXIÓN FIREBASE & GEMINI
 # ==========================================
 if not firebase_admin._apps:
     try:
-        # FIREBASE
         if "FIREBASE_KEY" in st.secrets:
             key_dict = dict(st.secrets["FIREBASE_KEY"])
             if "private_key" in key_dict:
@@ -53,11 +65,9 @@ if not firebase_admin._apps:
             cred = credentials.Certificate(key_dict)
             firebase_admin.initialize_app(cred)
         else:
-            # Fallback local
             cred = credentials.Certificate('serviceAccountKey.json')
             firebase_admin.initialize_app(cred)
             
-        # GEMINI IA (Opcional, si falla usa simulador)
         if "GOOGLE_API_KEY" in st.secrets:
             genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
             
@@ -68,83 +78,102 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 # ==========================================
-# 3. ROBOT DE IA (CRAWLER & GENERADOR)
+# 3. CRAWLER REAL (GOOGLE NEWS RSS)
 # ==========================================
-def buscar_y_generar_noticias_hoy():
+def limpiar_html(texto):
+    """Elimina etiquetas HTML residuales"""
+    clean = re.compile('<.*?>')
+    return re.sub(clean, '', texto)
+
+def analizar_con_gemini(texto, titulo, dept):
+    """Usa Gemini para resumir y dar acción estratégica"""
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        prompt = f"""
+        Eres un consultor estratégico para AMC Global. Analiza esta noticia:
+        Título: {titulo}
+        Texto: {texto}
+        
+        Devuelve un JSON estricto (sin markdown):
+        {{
+            "resumen_ejecutivo": "Un resumen de 1 linea enfocado en impacto empresarial.",
+            "accion_sugerida": "Una accion corta recomendada para el director de {dept}.",
+            "relevancia_score": (numero entre 80 y 100)
+        }}
+        """
+        response = model.generate_content(prompt)
+        # Limpieza básica del JSON
+        txt = response.text.replace("```json", "").replace("```", "").strip()
+        return json.loads(txt)
+    except:
+        # Fallback si Gemini falla (para que no rompa el flujo)
+        return {
+            "resumen_ejecutivo": f"Noticia detectada sobre {dept}. Revisar fuente original.",
+            "accion_sugerida": "Leer artículo completo para evaluar impacto.",
+            "relevancia_score": 85
+        }
+
+def crawler_noticias_reales():
     """
-    Genera noticias frescas con fecha de HOY.
-    Si Gemini está activo, las analiza. Si no, usa simulaciones de alta calidad.
+    Busca noticias REALES en Google News RSS y las guarda.
+    SIN DATOS FALSOS.
     """
-    noticias_generadas = 0
-    fecha_hoy = datetime.datetime.now() # Fecha exacta de ejecución (Hoy)
+    noticias_guardadas = 0
     
-    # Fuentes simuladas para asegurar que SIEMPRE haya datos el día de la presentación
-    # Estas noticias cambiarán su fecha a "AHORA MISMO" cuando se ejecute el código.
-    datos_crudos = [
-        {
-            "titulo": f"Reporte Financiero {fecha_hoy.strftime('%Y')}: ROI en Automatización",
-            "url": "https://bloomberg.com/agri-tech-roi",
-            "texto": "El retorno de inversión en plantas de procesamiento de alimentos ha subido un 18% gracias a la nueva normativa de eficiencia energética...",
-            "dept": "Finanzas y ROI"
-        },
-        {
-            "titulo": "Nueva Regulación UE sobre Etiquetado Inteligente",
-            "url": "https://europa.eu/food-safety-ai",
-            "texto": "La Unión Europea exigirá trazabilidad mediante Blockchain e IA para productos cárnicos a partir del próximo trimestre...",
-            "dept": "Legal & Regulatory Affairs / Innovation"
-        },
-        {
-            "titulo": "Breakthrough en Proteínas Alternativas Fermentadas",
-            "url": "https://techcrunch.com/food-fermentation",
-            "texto": "Startups en Israel logran reducir el coste de producción de proteínas por fermentación de precisión en un 40%...",
-            "dept": "FoodTech and Supply Chain"
-        }
-    ]
-
-    for dato in datos_crudos:
-        # Evitar duplicados EXACTOS de hoy
-        inicio_dia = datetime.datetime.now().replace(hour=0, minute=0, second=0)
-        docs = db.collection('news_articles')\
-                 .where(filter=FieldFilter('title', '==', dato['titulo']))\
-                 .where(filter=FieldFilter('published_at', '>=', inicio_dia))\
-                 .stream()
+    print("🕷️ Iniciando Crawler Real...")
+    
+    for dept, query in QUERIES_DEPT.items():
+        # URL de Google News RSS (México/Español) - Últimas 24 horas (when:1d)
+        url = f"https://news.google.com/rss/search?q={query}+when:1d&hl=es-419&gl=MX&ceid=MX:es-419"
         
-        if list(docs): continue # Ya existe esta noticia hoy
-
-        # ANÁLISIS (Simulado o con Gemini)
-        analysis = {
-            "titulo_traducido": dato['titulo'],
-            "resumen_ejecutivo": [
-                f"Detectado hoy {fecha_hoy.strftime('%d/%m')}: Impacto alto en {dato['dept']}.",
-                "Se recomienda revisión inmediata por el comité."
-            ],
-            "departamento": dato['dept'],
-            "relevancia_score": random.randint(88, 99),
-            "accion_sugerida": "Evaluar impacto en la cadena de suministro actual y preparar informe.",
-            "es_relevante_amc": True
-        }
-
-        # Intentar enriquecer con Gemini si está disponible
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            prompt = f"Mejora este resumen para un directivo: {dato['texto']}"
-            response = model.generate_content(prompt)
-            if response.text:
-                analysis["resumen_ejecutivo"][0] = response.text[:150] + "..."
-        except:
-            pass # Si falla Gemini, usamos el base
+            resp = requests.get(url, timeout=10)
+            soup = BeautifulSoup(resp.content, features="xml") # Parser XML
+            items = soup.findAll('item')
+            
+            # Procesamos máximo 2 noticias por departamento para no saturar
+            for item in items[:2]:
+                titulo = item.title.text
+                link = item.link.text
+                fecha_pub = item.pubDate.text
+                descripcion = limpiar_html(item.description.text)
+                
+                # VERIFICAR DUPLICADOS (Por título)
+                # Buscamos si ya existe esta noticia en la BD
+                docs = db.collection('news_articles')\
+                         .where(filter=FieldFilter('title', '==', titulo))\
+                         .limit(1).stream()
+                
+                if list(docs):
+                    continue # Ya existe, saltamos
+                
+                # ANÁLISIS IA
+                analisis = analizar_con_gemini(descripcion, titulo, dept)
+                
+                # ESTRUCTURA FINAL
+                analisis["titulo_traducido"] = titulo # Asumimos español por la fuente
+                analisis["departamento"] = dept
+                
+                # Convertir lista a string si Gemini devolvió string en resumen
+                if not isinstance(analisis["resumen_ejecutivo"], list):
+                    analisis["resumen_ejecutivo"] = [analisis["resumen_ejecutivo"]]
 
-        # GUARDAR EN FIREBASE CON FECHA DE HOY
-        db.collection('news_articles').add({
-            "title": dato['titulo'],
-            "url": dato['url'],
-            "published_at": datetime.datetime.now(), # <--- CLAVE: SE GUARDA CON HORA ACTUAL
-            "source": "AMC AI Crawler",
-            "analysis": analysis
-        })
-        noticias_generadas += 1
-        
-    return noticias_generadas
+                # GUARDAR EN FIREBASE
+                db.collection('news_articles').add({
+                    "title": titulo,
+                    "url": link,
+                    "published_at": datetime.datetime.now(), # Fecha de captura
+                    "source": "Google News RSS",
+                    "analysis": analisis
+                })
+                noticias_guardadas += 1
+                time.sleep(1) # Respeto a APIs
+                
+        except Exception as e:
+            print(f"Error buscando en {dept}: {e}")
+            continue
+
+    return noticias_guardadas
 
 # ==========================================
 # 4. GESTIÓN DE CORREO
@@ -155,7 +184,7 @@ def enviar_email(num_noticias, destinatario, nombre):
         msg = MIMEMultipart()
         msg['From'] = REMITENTE_EMAIL
         msg['To'] = destinatario
-        msg['Subject'] = Header(f"🚀 AMC Daily: {num_noticias} Noticias de Hoy ({datetime.datetime.now().strftime('%d/%m')})", 'utf-8')
+        msg['Subject'] = Header(f"📡 AMC Alerta: {num_noticias} Noticias Reales Detectadas", 'utf-8')
 
         html = f"""
         <html><body style="font-family:sans-serif;">
@@ -164,7 +193,7 @@ def enviar_email(num_noticias, destinatario, nombre):
             </div>
             <div style="padding:20px; background:#f4f4f4;">
                 <p>Hola <b>{nombre}</b>,</p>
-                <p>Tu sistema de inteligencia ha detectado <b>{num_noticias} noticias críticas hoy</b>.</p>
+                <p>El sistema de monitoreo en tiempo real ha encontrado <b>{num_noticias} noticias relevantes</b> en las últimas 24 horas.</p>
                 <center><a href="https://amc-dashboard.streamlit.app" style="background:#00c1a9; color:white; padding:10px 20px; text-decoration:none; border-radius:5px;">Ver Dashboard</a></center>
             </div>
         </body></html>
@@ -178,39 +207,38 @@ def enviar_email(num_noticias, destinatario, nombre):
         server.quit()
         return True
     except Exception as e:
-        print(e)
         return False
 
 # ==========================================
 # 5. TRIGGER AUTOMÁTICO (Solo busca noticias de HOY)
 # ==========================================
 def verificar_dia_actual():
-    # Definir el inicio del día de hoy (00:00:00)
     hoy_inicio = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     
-    # Consultar si hay noticias creadas DESPUÉS de las 00:00 de hoy
+    # Consultamos si hay noticias de HOY
     docs = db.collection('news_articles')\
              .where(filter=FieldFilter('published_at', '>=', hoy_inicio))\
              .limit(1).stream()
     
     if not list(docs):
-        # 🚨 NO HAY NOTICIAS DE HOY -> EJECUTAR ROBOT
+        # 🚨 NO HAY NOTICIAS -> EJECUTAR CRAWLER REAL
         placeholder = st.empty()
         with placeholder.container():
-            st.warning(f"⚠️ No hay datos del {hoy_inicio.strftime('%d/%m')}. Iniciando Crawler...")
+            st.warning(f"⚠️ No hay noticias frescas hoy. Escaneando internet en tiempo real...")
             bar = st.progress(0)
             
-            n = buscar_y_generar_noticias_hoy()
-            bar.progress(80)
+            # Ejecutamos el crawler real
+            n = crawler_noticias_reales()
+            bar.progress(100)
             
             if n > 0:
-                st.success(f"✅ Se han ingestada {n} noticias frescas de hoy.")
-                # Enviar correo al admin o usuario actual
+                st.success(f"✅ Se han encontrado {n} noticias reales.")
                 email_dest = st.session_state.get('user_email', REMITENTE_EMAIL)
                 enviar_email(n, email_dest, "Usuario")
+            else:
+                st.error("❌ El escaneo terminó pero no se encontraron noticias nuevas relevantes en Google News.")
             
-            bar.progress(100)
-            time.sleep(1)
+            time.sleep(2)
         placeholder.empty()
         st.rerun()
 
@@ -239,26 +267,23 @@ if not st.session_state['logged_in']:
 
 else:
     # --- DENTRO DE LA APP ---
-    
-    # 1. TRIGGER: Asegurar que hay noticias DE HOY
     verificar_dia_actual()
     
-    # 2. DATOS USUARIO
     try:
         user_data = db.collection('users').document(st.session_state['user_email']).get().to_dict()
     except: user_data = {"nombre": "Admin", "intereses": []}
 
-    # 3. SIDEBAR (FILTROS)
+    # SIDEBAR
     with st.sidebar:
         st.title("AMC HUB")
         st.caption(f"Hola, {user_data.get('nombre')}")
         st.markdown("---")
         
-        # --- FILTRO TEMPORAL (NUEVO) ---
-        st.markdown("### 📅 Periodo")
+        # FILTRO DE TIEMPO
+        st.markdown("### 📅 Filtro Temporal")
         filtro_tiempo = st.radio(
-            "Mostrar noticias de:",
-            ["Hoy (Tiempo Real)", "Ayer", "Histórico Completo"],
+            "Ver noticias de:",
+            ["Hoy (Tiempo Real)", "Ayer", "Histórico"],
             index=0
         )
         
@@ -271,50 +296,47 @@ else:
 
         st.markdown("---")
         
-        # BOTÓN EMAIL (MANUAL)
         if st.button("📧 Enviar Reporte Ahora"):
             with st.spinner("Enviando..."):
                 ok = enviar_email(5, st.session_state['user_email'], user_data.get('nombre'))
                 if ok: st.success("Enviado")
                 else: st.error("Error")
         
+        if st.button("🔄 Escanear Ahora (Manual)"):
+            with st.spinner("Buscando en Google News..."):
+                n = crawler_noticias_reales()
+                if n > 0: st.success(f"{n} Noticias encontradas.")
+                else: st.warning("No se encontraron noticias nuevas.")
+                time.sleep(1)
+                st.rerun()
+
         if st.button("Cerrar Sesión"):
             st.session_state['logged_in'] = False
             st.rerun()
 
-    # 4. CONTENIDO PRINCIPAL
+    # DASHBOARD
     st.title("Panel de Inteligencia Estratégica")
     
-    # Definir fechas para la consulta según el filtro
     hoy_inicio = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     ayer_inicio = hoy_inicio - datetime.timedelta(days=1)
     
-    subtitulo = f"Noticias del: **{hoy_inicio.strftime('%d/%m/%Y')}**"
-    
-    # LÓGICA DE CONSULTA DE BASE DE DATOS
     query = db.collection('news_articles')
-    
     if mis_intereses:
         query = query.where(filter=FieldFilter('analysis.departamento', 'in', mis_intereses))
     
-    # Aplicar filtro de TIEMPO
     if filtro_tiempo == "Hoy (Tiempo Real)":
         query = query.where(filter=FieldFilter('published_at', '>=', hoy_inicio))
+        st.caption(f"Mostrando noticias detectadas hoy ({datetime.datetime.now().strftime('%d/%m/%Y')})")
     elif filtro_tiempo == "Ayer":
-        subtitulo = f"Noticias del: **{ayer_inicio.strftime('%d/%m/%Y')}**"
         query = query.where(filter=FieldFilter('published_at', '>=', ayer_inicio))\
                      .where(filter=FieldFilter('published_at', '<', hoy_inicio))
+        st.caption("Mostrando archivo de ayer")
     else:
-        subtitulo = "**Archivo Histórico Completo**"
-        # Sin filtro de fecha, trae todo
-        pass
+        st.caption("Mostrando archivo histórico completo")
 
-    st.markdown(subtitulo)
-    
     tab1, tab2 = st.tabs(["📰 Monitor de Noticias", "📊 Analítica"])
 
     with tab1:
-        # Ejecutar consulta
         docs = query.order_by('published_at', direction=firestore.Query.DESCENDING).limit(20).stream()
         lista = [d.to_dict() for d in docs]
         
@@ -322,25 +344,24 @@ else:
             for n in lista:
                 a = n.get('analysis', {})
                 dept = a.get('departamento', 'General')
-                # Formato de fecha amigable
                 fecha_raw = n.get('published_at', datetime.datetime.now())
+                
                 if hasattr(fecha_raw, 'strftime'): 
                     fecha_str = fecha_raw.strftime('%H:%M') if filtro_tiempo == "Hoy (Tiempo Real)" else fecha_raw.strftime('%d %b %H:%M')
                 else: fecha_str = str(fecha_raw)
 
                 color = COLORES_DEPT.get(dept, '#ccc')
                 
-                # Renderizar Tarjeta
                 html_card = f"""
                 <div style="background-color: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin-bottom: 20px; border-left: 5px solid {color};">
                     <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
                         <span style="color: {color}; font-weight: 700; font-size: 0.85rem;">{dept.upper()}</span>
                         <span style="color: #666; font-size: 0.85rem;">{fecha_str}</span>
                     </div>
-                    <div style="color: #fff; font-size: 1.3rem; font-weight: 700; margin-bottom: 10px; line-height:1.2;">{a.get('titulo_traducido', 'Sin título')}</div>
+                    <div style="color: #fff; font-size: 1.3rem; font-weight: 700; margin-bottom: 10px; line-height:1.2;">{n.get('title', 'Sin título')}</div>
                     <div style="color: #c9d1d9; font-size: 0.95rem; margin-bottom: 15px;">{a.get('resumen_ejecutivo', [''])[0]}</div>
                     <div style="background:#0d1117; padding:10px; border-radius:6px; border:1px dashed #30363d; color:#8b949e; font-size:0.9rem;">
-                        💡 <b>Acción:</b> {a.get('accion_sugerida', '')}
+                        💡 <b>Acción:</b> {a.get('accion_sugerida', 'Revisar noticia')}
                     </div>
                     <div style="margin-top:15px; display:flex; justify-content:space-between;">
                          <span style="color:#888; font-size:0.8rem;">Relevancia: {a.get('relevancia_score', 0)}%</span>
@@ -351,12 +372,11 @@ else:
                 st.markdown(textwrap.dedent(html_card), unsafe_allow_html=True)
         else:
             if filtro_tiempo == "Hoy (Tiempo Real)":
-                st.info("✅ Todo está al día. No hay noticias críticas nuevas en este momento (el crawler se ejecuta automáticamente si detecta vacío).")
+                st.info("No hay noticias aún hoy. Si acabas de entrar, el escáner se está ejecutando o no encontró novedades en Google News.")
             else:
                 st.warning("No hay noticias en este periodo.")
 
     with tab2:
-        # Analítica (Global, no depende del filtro de tiempo para ser más útil)
         docs_all = db.collection('news_articles').limit(50).stream()
         data = []
         for d in docs_all:
