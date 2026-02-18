@@ -11,22 +11,34 @@ from email.mime.multipart import MIMEMultipart
 from email.header import Header
 import time
 import json
-import textwrap
+import hashlib
 import google.generativeai as genai
 from duckduckgo_search import DDGS
 
 # ==========================================
-# 1. CONFIGURACIÓN
+# 1. CONFIGURACIÓN Y ESTILOS
 # ==========================================
 st.set_page_config(
     page_title="AMC Intelligence Hub", 
-    page_icon="🔓", # Icono de candado abierto
-    layout="wide"
+    page_icon="🔓", 
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# --- CREDENCIALES ---
+# Estilos CSS personalizados para limpiar la interfaz
+st.markdown("""
+<style>
+    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
+    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #f0f2f6; border-radius: 4px 4px 0px 0px; gap: 1px; padding-top: 10px; padding-bottom: 10px; }
+    .stTabs [aria-selected="true"] { background-color: #ffffff; border-top: 2px solid #00c1a9; }
+    h1 { color: #00c1a9 !important; }
+</style>
+""", unsafe_allow_html=True)
+
+# --- CONSTANTES ---
 REMITENTE_EMAIL = "darlesskayt@gmail.com"
-REMITENTE_PASSWORD = "dgwafnrnahcvgpjz"
+# ¡IMPORTANTE!: Asegúrate de que esta clave sea una "App Password" de Google, no tu pass normal
+REMITENTE_PASSWORD = "dgwafnrnahcvgpjz" 
 
 LISTA_DEPARTAMENTOS = [
     "Finanzas y ROI", 
@@ -42,7 +54,6 @@ COLORES_DEPT = {
     "Legal & Regulatory Affairs / Innovation": "#FF5252"
 }
 
-# QUERIES "OPEN SOURCE" (Más cortas y efectivas)
 QUERIES_DEPT = {
     "Finanzas y ROI": "retorno inversión automatización alimentos",
     "FoodTech and Supply Chain": "tecnología cadena suministro alimentos",
@@ -52,32 +63,11 @@ QUERIES_DEPT = {
 }
 
 # ==========================================
-# 2. CONEXIÓN FIREBASE & GEMINI
+# 2. UTILIDADES DE SEGURIDAD & DATOS
 # ==========================================
-if not firebase_admin._apps:
-    try:
-        if "FIREBASE_KEY" in st.secrets:
-            key_dict = dict(st.secrets["FIREBASE_KEY"])
-            if "private_key" in key_dict:
-                key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
-            cred = credentials.Certificate(key_dict)
-            firebase_admin.initialize_app(cred)
-        else:
-            cred = credentials.Certificate('serviceAccountKey.json')
-            firebase_admin.initialize_app(cred)
-            
-        if "GOOGLE_API_KEY" in st.secrets:
-            genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-            
-    except Exception as e:
-        st.error(f"Error Configuración: {e}")
-        st.stop()
-
-db = firestore.client()
-
-# ==========================================
-# 3. MOTOR DE DATOS (FILTRO "GRATIS" + IA)
-# ==========================================
+def hash_pass(password):
+    """Cifra la contraseña para no guardarla en texto plano (Seguridad Básica)"""
+    return hashlib.sha256(str.encode(password)).hexdigest()
 
 def limpiar_json(texto):
     try:
@@ -88,307 +78,366 @@ def limpiar_json(texto):
         return None
     except: return None
 
-def normalizar_analisis(analisis, titulo, texto):
-    """Asegura campos mínimos para no dejar tarjetas vacías en UI."""
-    analisis = analisis or {}
+# ==========================================
+# 3. CONEXIÓN FIREBASE & GEMINI (ROBUSTA)
+# ==========================================
+@st.cache_resource
+def init_connection():
+    """Conexión Singleton a Firebase para evitar reconexiones múltiples"""
+    try:
+        if not firebase_admin._apps:
+            # Opción A: Streamlit Secrets (Producción)
+            if "FIREBASE_KEY" in st.secrets:
+                key_dict = dict(st.secrets["FIREBASE_KEY"])
+                # FIX CRÍTICO: Reemplazar \\n escapados por saltos de línea reales
+                if "private_key" in key_dict:
+                    key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
+                cred = credentials.Certificate(key_dict)
+                firebase_admin.initialize_app(cred)
+            # Opción B: Archivo Local (Desarrollo)
+            else:
+                cred = credentials.Certificate('serviceAccountKey.json')
+                firebase_admin.initialize_app(cred)
+        return firestore.client()
+    except Exception as e:
+        st.error(f"❌ Error Crítico de Conexión a BD: {e}")
+        return None
 
-    titulo_mejorado = analisis.get('titulo_mejorado') or analisis.get('titulo') or titulo
-    resumen = (
-        analisis.get('resumen')
-        or analisis.get('resumen_ejecutivo')
-        or analisis.get('summary')
-        or f"{texto[:200]}..."
-    )
-    accion = (
-        analisis.get('accion')
-        or analisis.get('accion_sugerida')
-        or analisis.get('sugerencia')
-        or "Leer fuente original."
-    )
-    score = analisis.get('score') or analisis.get('relevancia_score') or 70
+db = init_connection()
 
-    if isinstance(resumen, list):
-        resumen = resumen[0] if resumen else "Sin resumen disponible."
+# Configurar Gemini
+if "GOOGLE_API_KEY" in st.secrets:
+    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
-    return {
-        "titulo_mejorado": str(titulo_mejorado).strip() or titulo,
-        "resumen": str(resumen).strip() or "Sin resumen disponible.",
-        "accion": str(accion).strip() or "Leer fuente original.",
-        "score": score
-    }
-
+# ==========================================
+# 4. LÓGICA DE NEGOCIO (BUSCADOR & IA)
+# ==========================================
 def analizar_con_gemini(texto, titulo, dept):
-    """Genera el resumen usando la IA"""
     if "GOOGLE_API_KEY" not in st.secrets:
-        return {
-            "titulo_mejorado": titulo,
-            "resumen": f"⚠️ (Sin API Key) {texto[:150]}...",
-            "accion": "Configurar IA.",
-            "score": 50
-        }
+        return {"titulo_mejorado": titulo, "resumen": texto[:200], "accion": "Configurar API Key", "score": 50}
 
     model = genai.GenerativeModel('gemini-1.5-flash')
-    
     prompt = f"""
-    Analiza esta noticia para AMC Global ({dept}).
-    Noticia: {titulo} - {texto}
-    
-    Tarea:
-    1. Traduce título al español.
-    2. Resumen ejecutivo de 40-50 palabras (un parrafo).
-    3. Acción estratégica breve.
-    
-    JSON Output:
+    Eres un analista de inteligencia competitiva para AMC Global ({dept}).
+    Analiza: {titulo}
+    Texto: {texto[:1000]}...
+
+    Salida JSON estricta:
     {{
-        "titulo_mejorado": "...",
-        "resumen": "...",
-        "accion": "...",
-        "score": 90
+        "titulo_mejorado": "Título en español profesional",
+        "resumen": "Resumen ejecutivo de 40 palabras máximo.",
+        "accion": "Sugerencia estratégica breve.",
+        "score": (0-100 relevancia para industria alimentaria)
     }}
     """
-    for _ in range(2): # 2 intentos
-        try:
-            response = model.generate_content(prompt)
-            data = limpiar_json(response.text)
-            if data: return data
-        except: time.sleep(1)
-
-    return {
-        "titulo_mejorado": titulo,
-        "resumen": f"{texto[:200]}...",
-        "accion": "Leer fuente original.",
-        "score": 70
-    }
+    try:
+        response = model.generate_content(prompt)
+        data = limpiar_json(response.text)
+        if data: return data
+    except: pass
+    
+    return {"titulo_mejorado": titulo, "resumen": "Error en análisis IA", "accion": "Revisar manual", "score": 50}
 
 def buscador_inteligente():
-    """
-    MODO CASCADA CON FILTRO DE ACCESO
-    """
     count_news = 0
     ddgs = DDGS()
-    
-    print("🔓 Iniciando Búsqueda en Fuentes Abiertas...")
+    news_batch = [] # Acumulamos para enviar email al final
+
+    status_container = st.status("🕵️ Iniciando escaneo de inteligencia...", expanded=True)
     
     for dept, query in QUERIES_DEPT.items():
-        resultados = []
-        
-        # ESTRATEGIA 1: Noticias recientes en México (Intento estricto)
+        status_container.write(f"Buscando: {dept}...")
         try:
-            gen = ddgs.news(query, region="mx-es", timelimit="d", max_results=3)
-            resultados = list(gen)
-        except: pass
-        
-        # ESTRATEGIA 2: Si falla, buscar en WEB GENERAL (Blogs, PDFs, Artículos libres)
-        # Esto salta los muros de pago de los periódicos
-        if not resultados:
-            try:
-                # Quitamos el filtro de región estricta para ampliar resultados en español global
-                gen = ddgs.text(query + " español", region="wt-wt", timelimit="w", max_results=2)
-                resultados = list(gen)
-            except: pass
-
-        for r in resultados:
-            titulo = r.get('title', '')
-            link = r.get('url', r.get('href', ''))
-            body = r.get('body', r.get('snippet', ''))
+            # Busqueda web general para saltar paywalls de noticias específicas
+            resultados = list(ddgs.text(f"{query} noticias recientes", region="wt-wt", timelimit="d", max_results=3))
             
-            if not titulo or not link: continue
-            
-            # FILTRO ANTI-PAYWALL BÁSICO
-            # Si el snippet es muy corto o dice "suscríbete", lo saltamos
-            if len(body) < 30 or "suscríbete" in body.lower() or "paywall" in body.lower():
-                continue
+            for r in resultados:
+                titulo = r.get('title')
+                link = r.get('href')
+                body = r.get('body')
 
-            # Verificar duplicados
-            docs = db.collection('news_articles')\
-                     .where(filter=FieldFilter('title', '==', titulo))\
-                     .limit(1).stream()
-            if list(docs): continue
+                if not titulo or not link: continue
+                
+                # Verificar duplicados en BD
+                docs = db.collection('news_articles').where(filter=FieldFilter('title', '==', titulo)).limit(1).stream()
+                if list(docs): continue
 
-            # IA
-            analisis = normalizar_analisis(analizar_con_gemini(body, titulo, dept), titulo, body)
-            
-            # Guardar
-            db.collection('news_articles').add({
-                "title": analisis.get('titulo_mejorado', titulo),
-                "url": link,
-                "published_at": datetime.datetime.now(),
-                "source": r.get('source', 'Web Abierta'),
-                "analysis": {
-                    "departamento": dept,
-                    "titulo_traducido": analisis.get('titulo_mejorado', titulo),
-                    "resumen_ejecutivo": [analisis.get('resumen')],
-                    "accion_sugerida": analisis.get('accion'),
-                    "relevancia_score": analisis.get('score')
+                # Analizar
+                analisis = analizar_con_gemini(body, titulo, dept)
+                
+                doc_data = {
+                    "title": analisis.get('titulo_mejorado', titulo),
+                    "url": link,
+                    "published_at": datetime.datetime.now(),
+                    "source": "Web Abierta / AI Hub",
+                    "analysis": {
+                        "departamento": dept,
+                        "resumen_ejecutivo": analisis.get('resumen'),
+                        "accion_sugerida": analisis.get('accion'),
+                        "relevancia_score": analisis.get('score')
+                    }
                 }
-            })
-            count_news += 1
-            time.sleep(0.5)
+                
+                db.collection('news_articles').add(doc_data)
+                news_batch.append(doc_data) # Guardar para el reporte de email
+                count_news += 1
+                time.sleep(0.5) # Respetar rate limits
+                
+        except Exception as e:
+            print(f"Error en {dept}: {e}")
+            continue
 
-    return count_news
+    status_container.update(label="✅ Escaneo completado", state="complete", expanded=False)
+    return news_batch
 
 # ==========================================
-# 4. EMAIL Y TRIGGER
+# 5. SISTEMA DE EMAIL MEJORADO (HTML)
 # ==========================================
-def enviar_email(num, dest, nombre):
-    if num == 0: return
+def enviar_reporte_email(news_list, dest, nombre):
+    if not news_list: return False
+    
     try:
         msg = MIMEMultipart()
         msg['From'] = REMITENTE_EMAIL
         msg['To'] = dest
-        msg['Subject'] = Header(f"🔓 AMC Report: {num} Noticias Abiertas", 'utf-8')
+        msg['Subject'] = Header(f"🔓 AMC Daily: {len(news_list)} Nuevos Insights", 'utf-8')
+
+        # Construir tabla HTML
+        rows = ""
+        for n in news_list:
+            analisis = n.get('analysis', {})
+            color = COLORES_DEPT.get(analisis.get('departamento'), "#333")
+            rows += f"""
+            <tr>
+                <td style="padding:15px; border-bottom:1px solid #eee;">
+                    <span style="color:{color}; font-size:10px; font-weight:bold;">{analisis.get('departamento', '').upper()}</span>
+                    <h3 style="margin:5px 0; color:#333;">{n.get('title')}</h3>
+                    <p style="color:#666; font-size:14px; line-height:1.5;">{analisis.get('resumen_ejecutivo')}</p>
+                    <a href="{n.get('url')}" style="color:#00c1a9; text-decoration:none; font-size:12px;">🔗 Leer fuente original</a>
+                </td>
+            </tr>
+            """
+
         html = f"""
-        <div style="font-family:sans-serif; padding:20px; background:#f4f4f4;">
-            <h2 style="color:#00c1a9;">AMC INTELLIGENCE</h2>
-            <p>Hola {nombre}, hemos recolectado <b>{num} noticias de fuentes abiertas</b>.</p>
-            <a href="https://amc-dashboard.streamlit.app">Ver Dashboard</a>
+        <div style="font-family:Helvetica, sans-serif; max-width:600px; margin:0 auto; border:1px solid #e0e0e0;">
+            <div style="background:#161b22; padding:20px; text-align:center;">
+                <h2 style="color:#00c1a9; margin:0;">AMC INTELLIGENCE</h2>
+            </div>
+            <div style="padding:20px;">
+                <p>Hola {nombre}, aquí tienes el resumen de inteligencia de hoy:</p>
+                <table style="width:100%; border-collapse:collapse;">
+                    {rows}
+                </table>
+                <br>
+                <div style="text-align:center;">
+                    <a href="https://amc-dashboard.streamlit.app" style="background:#00c1a9; color:white; padding:10px 20px; text-decoration:none; border-radius:5px;">Ver Dashboard Completo</a>
+                </div>
+            </div>
         </div>
         """
+        
         msg.attach(MIMEText(html, 'html', 'utf-8'))
+        
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
         server.login(REMITENTE_EMAIL, REMITENTE_PASSWORD)
         server.send_message(msg)
         server.quit()
         return True
-    except: return False
-
-def verificar_ingesta_hoy():
-    inicio_hoy = datetime.datetime.now().replace(hour=0, minute=0, second=0)
-    docs = db.collection('news_articles').where(filter=FieldFilter('published_at', '>=', inicio_hoy)).limit(1).stream()
-    
-    if not list(docs):
-        placeholder = st.empty()
-        with placeholder.container():
-            st.warning("🔍 Buscando en fuentes gratuitas y blogs tecnológicos...")
-            bar = st.progress(0)
-            n = buscador_inteligente()
-            bar.progress(100)
-            
-            if n > 0:
-                st.success(f"✅ Ingesta Libre: {n} noticias encontradas.")
-                enviar_email(n, st.session_state.get('user_email', REMITENTE_EMAIL), "Usuario")
-            else:
-                st.error("⚠️ No se encontró información relevante en fuentes abiertas hoy.")
-            
-            time.sleep(1.5)
-        placeholder.empty()
-        st.rerun()
+    except Exception as e:
+        print(f"Error Email: {e}")
+        return False
 
 # ==========================================
-# 5. UI PRINCIPAL
+# 6. GESTIÓN DE SESIÓN Y LOGIN
 # ==========================================
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
+if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 
-if not st.session_state['logged_in']:
-    c1, c2, c3 = st.columns([1, 1, 1])
+def main_login():
+    c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        st.markdown("<br><h1 style='text-align:center; color:#00c1a9;'>AMC GLOBAL</h1>", unsafe_allow_html=True)
-        email = st.text_input("Usuario")
-        password = st.text_input("Contraseña", type="password")
-        if st.button("ACCESO", use_container_width=True):
-            try:
-                user_ref = db.collection('users').document(email).get()
-                if user_ref.exists and user_ref.to_dict().get('password') == password:
-                    st.session_state['logged_in'] = True
-                    st.session_state['user_email'] = email
-                    st.rerun()
-                else: st.error("Denegado")
-            except: st.error("Error BD")
-else:
-    verificar_ingesta_hoy()
-    try: user_data = db.collection('users').document(st.session_state['user_email']).get().to_dict()
-    except: user_data = {"nombre": "Admin", "intereses": []}
+        st.markdown("<br><h1 style='text-align:center;'>AMC GLOBAL</h1>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align:center; color:#666;'>Intelligence Hub Access</p>", unsafe_allow_html=True)
+        
+        tab1, tab2 = st.tabs(["🔐 INGRESAR", "📝 REGISTRARSE"])
+        
+        # --- LOGIN ---
+        with tab1:
+            with st.form("login_form"):
+                email = st.text_input("Usuario (Email)")
+                password = st.text_input("Contraseña", type="password")
+                submitted = st.form_submit_button("ACCESO", use_container_width=True)
+                
+                if submitted:
+                    if not db:
+                        st.error("Error de conexión con base de datos.")
+                        st.stop()
+                        
+                    doc_ref = db.collection('users').document(email)
+                    doc = doc_ref.get()
+                    
+                    if doc.exists:
+                        user_data = doc.to_dict()
+                        # Verificación simple (hash vs hash idealmente, aqui simplificado para compatibilidad)
+                        # Si ya tienes usuarios con pass texto plano, esto funcionará. 
+                        # Si es nuevo, comparará hashes.
+                        stored_pass = user_data.get('password')
+                        
+                        if stored_pass == password or stored_pass == hash_pass(password):
+                            st.session_state['logged_in'] = True
+                            st.session_state['user_email'] = email
+                            st.session_state['user_info'] = user_data
+                            st.rerun()
+                        else:
+                            st.error("Contraseña incorrecta.")
+                    else:
+                        st.error("Usuario no encontrado.")
 
+        # --- REGISTRO ---
+        with tab2:
+            with st.form("register_form"):
+                st.write("Solicitud de acceso para nuevos analistas")
+                new_email = st.text_input("Email Corporativo")
+                new_name = st.text_input("Nombre Completo")
+                new_pass = st.text_input("Definir Contraseña", type="password")
+                reg_submitted = st.form_submit_button("CREAR CUENTA", use_container_width=True)
+                
+                if reg_submitted:
+                    if new_email and new_name and new_pass:
+                        doc_ref = db.collection('users').document(new_email)
+                        if doc_ref.get().exists:
+                            st.warning("Este usuario ya existe.")
+                        else:
+                            doc_ref.set({
+                                "nombre": new_name,
+                                "password": hash_pass(new_pass), # Guardamos con seguridad básica
+                                "intereses": LISTA_DEPARTAMENTOS, # Default todos
+                                "created_at": datetime.datetime.now()
+                            })
+                            st.success("Cuenta creada exitosamente. Por favor ingresa en la pestaña 'INGRESAR'.")
+                    else:
+                        st.warning("Por favor completa todos los campos.")
+
+# ==========================================
+# 7. APLICACIÓN PRINCIPAL (DASHBOARD)
+# ==========================================
+def main_app():
+    user = st.session_state['user_info']
+    
+    # --- SIDEBAR ---
     with st.sidebar:
         st.title("AMC HUB")
-        st.caption(f"Operador: {user_data.get('nombre')}")
-        st.divider()
-        filtro_tiempo = st.radio("Datos:", ["Tiempo Real (Hoy)", "Ayer", "Histórico"], index=0)
-        mis_intereses = st.multiselect("Áreas:", LISTA_DEPARTAMENTOS, default=user_data.get('intereses', [])[:2])
-        if st.button("💾 Guardar"):
-            db.collection('users').document(st.session_state['user_email']).update({"intereses": mis_intereses})
+        st.caption(f"👤 {user.get('nombre', 'Analista')}")
+        
+        if st.button("🚪 Cerrar Sesión"):
+            st.session_state['logged_in'] = False
+            st.session_state['user_info'] = {}
             st.rerun()
+            
         st.divider()
-        if st.button("🚀 Escaneo Web Abierta"):
-            with st.spinner("Filtrando sitios de pago..."):
-                n = buscador_inteligente()
-                st.success(f"Encontradas: {n}")
+        
+        filtro_tiempo = st.radio("Período:", ["Hoy (Tiempo Real)", "Ayer", "Histórico 7 días"])
+        
+        # Guardar preferencias
+        mis_intereses = st.multiselect("Filtro por Áreas:", LISTA_DEPARTAMENTOS, default=user.get('intereses', [])[:3])
+        if st.button("💾 Actualizar Preferencias"):
+            db.collection('users').document(st.session_state['user_email']).update({"intereses": mis_intereses})
+            st.success("Guardado")
+            time.sleep(1)
+            st.rerun()
+
+        st.divider()
+        st.caption("Herramientas Admin")
+        if st.button("🚀 Forzar Escaneo Web"):
+            news_batch = buscador_inteligente()
+            if news_batch:
+                st.success(f"{len(news_batch)} noticias nuevas.")
+                # Enviar email automático tras escaneo manual
+                enviar_reporte_email(news_batch, st.session_state['user_email'], user.get('nombre'))
                 time.sleep(1)
                 st.rerun()
-        if st.button("📧 Email"):
-            enviar_email(5, st.session_state['user_email'], "Usuario")
-            st.success("Enviado")
-        if st.button("Salir"):
-            st.session_state['logged_in'] = False
-            st.rerun()
+            else:
+                st.warning("No se encontraron novedades recientes.")
 
-    st.title("Centro de Inteligencia (Fuentes Abiertas)")
+    # --- CONTENIDO CENTRAL ---
+    st.title("Centro de Inteligencia")
     
+    # Lógica de fechas
     hoy = datetime.datetime.now().replace(hour=0, minute=0, second=0)
-    ayer = hoy - datetime.timedelta(days=1)
-    
     query = db.collection('news_articles')
-    if mis_intereses: query = query.where(filter=FieldFilter('analysis.departamento', 'in', mis_intereses))
     
-    if filtro_tiempo == "Tiempo Real (Hoy)":
+    if mis_intereses: 
+        query = query.where(filter=FieldFilter('analysis.departamento', 'in', mis_intereses))
+        
+    if filtro_tiempo == "Hoy (Tiempo Real)":
         query = query.where(filter=FieldFilter('published_at', '>=', hoy))
     elif filtro_tiempo == "Ayer":
+        ayer = hoy - datetime.timedelta(days=1)
         query = query.where(filter=FieldFilter('published_at', '>=', ayer)).where(filter=FieldFilter('published_at', '<', hoy))
+    else:
+        semana = hoy - datetime.timedelta(days=7)
+        query = query.where(filter=FieldFilter('published_at', '>=', semana))
+
+    # Tabs de visualización
+    tab_news, tab_metrics = st.tabs(["📰 Feed de Noticias", "📊 Métricas de Impacto"])
     
-    tab1, tab2 = st.tabs(["Noticias", "Métricas"])
-    
-    with tab1:
-        docs = query.order_by('published_at', direction=firestore.Query.DESCENDING).limit(20).stream()
-        lista = [d.to_dict() for d in docs]
+    with tab_news:
+        docs = query.order_by('published_at', direction=firestore.Query.DESCENDING).limit(30).stream()
+        lista_noticias = [d.to_dict() for d in docs]
         
-        if lista:
-            for n in lista:
-                a = n.get('analysis', {})
-                dept = a.get('departamento', 'General')
-                color = COLORES_DEPT.get(dept, '#888')
-                fecha = n.get('published_at')
-                fecha_str = fecha.strftime("%H:%M") if filtro_tiempo == "Tiempo Real (Hoy)" else fecha.strftime("%d/%m %H:%M")
+        if not lista_noticias:
+            st.info("📭 No hay noticias para este filtro. Intenta 'Forzar Escaneo Web' en el menú lateral.")
+        
+        for n in lista_noticias:
+            a = n.get('analysis', {})
+            dept = a.get('departamento', 'General')
+            color = COLORES_DEPT.get(dept, '#888')
+            
+            with st.container():
+                cols = st.columns([0.1, 4])
+                with cols[0]:
+                    st.markdown(f"<div style='height:100%; width:5px; background-color:{color}; border-radius:5px;'></div>", unsafe_allow_html=True)
+                with cols[1]:
+                    st.caption(f"{dept} • {n.get('published_at').strftime('%d/%m %H:%M')}")
+                    st.markdown(f"### [{n.get('title')}]({n.get('url')})")
+                    st.markdown(f"{a.get('resumen_ejecutivo', 'Sin resumen')}")
+                    
+                    c_act, c_score = st.columns([3, 1])
+                    with c_act:
+                        st.info(f"💡 **Acción:** {a.get('accion_sugerida', 'Revisar')}")
+                    with c_score:
+                        score = a.get('relevancia_score', 0)
+                        st.metric("Relevancia", f"{score}/100")
+                st.divider()
+
+    with tab_metrics:
+        # Recuperar más datos para gráficas
+        all_query = db.collection('news_articles').order_by('published_at', direction=firestore.Query.DESCENDING).limit(100)
+        df_docs = [d.to_dict()['analysis'] for d in all_query.stream() if 'analysis' in d.to_dict()]
+        
+        if df_docs:
+            df = pd.DataFrame(df_docs)
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("Distribución por Departamento")
+                fig_pie = px.pie(df, names='departamento', color='departamento', color_discrete_map=COLORES_DEPT, hole=0.4)
+                st.plotly_chart(fig_pie, use_container_width=True)
                 
-                resumen_texto = a.get('resumen_ejecutivo', ['Sin resumen disponible.'])
-                if isinstance(resumen_texto, list): resumen_final = resumen_texto[0] if resumen_texto else 'Sin resumen disponible.'
-                else: resumen_final = str(resumen_texto)
-                if not resumen_final or resumen_final.lower() in ('none', 'null', 'nan'):
-                    resumen_final = 'Sin resumen disponible.'
-
-                accion_final = a.get('accion_sugerida')
-                if not accion_final or str(accion_final).lower() in ('none', 'null', 'nan'):
-                    accion_final = 'Leer fuente original.'
-
-                st.markdown(f"""
-                <div style="background:#161b22; border-left:5px solid {color}; border-radius:8px; padding:20px; margin-bottom:20px; border:1px solid #30363d;">
-                    <div style="display:flex; justify-content:space-between; color:{color}; font-weight:bold; font-size:12px; margin-bottom:8px;">
-                        <span>{dept.upper()}</span>
-                        <span style="color:#666;">{fecha_str}</span>
-                    </div>
-                    <h3 style="color:#fff; margin:0 0 12px 0; font-size:20px;">{n.get('title')}</h3>
-                    <div style="color:#c9d1d9; font-size:15px; line-height:1.6; margin-bottom:15px; text-align: justify;">
-                        {resumen_final}
-                    </div>
-                    <div style="background:rgba(0,193,169,0.1); padding:12px; border-radius:6px; font-size:14px; color:#aaa; border-left: 2px solid #00c1a9;">
-                        💡 <b>Acción:</b> {accion_final}
-                    </div>
-                    <div style="margin-top:15px; text-align:right;">
-                        <a href="{n.get('url')}" target="_blank" style="color:{color}; text-decoration:none; font-weight:bold; font-size:13px;">Fuente 🔗</a>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+            with col2:
+                st.subheader("Relevancia Promedio")
+                df_score = df.groupby('departamento')['relevancia_score'].mean().reset_index()
+                fig_bar = px.bar(df_score, x='departamento', y='relevancia_score', color='departamento', color_discrete_map=COLORES_DEPT)
+                st.plotly_chart(fig_bar, use_container_width=True)
         else:
-            if filtro_tiempo == "Tiempo Real (Hoy)":
-                st.info("ℹ️ Buscando... Si tarda, prueba el botón 'Escaneo Web Abierta' en el menú.")
-            else: st.warning("Sin datos.")
+            st.warning("Insuficientes datos para métricas.")
 
-    with tab2:
-        all_docs = db.collection('news_articles').limit(100).stream()
-        df = pd.DataFrame([d.to_dict()['analysis'] for d in all_docs if 'analysis' in d.to_dict()])
-        if not df.empty:
-            c1, c2 = st.columns(2)
-            with c1: st.plotly_chart(px.pie(df, names='departamento', color='departamento', color_discrete_map=COLORES_DEPT), use_container_width=True)
-            with c2: 
-                grp = df.groupby('departamento')['relevancia_score'].mean().reset_index()
-                st.plotly_chart(px.bar(grp, x='departamento', y='relevancia_score', color='departamento', color_discrete_map=COLORES_DEPT), use_container_width=True)
+# ==========================================
+# 8. EJECUCIÓN
+# ==========================================
+if __name__ == "__main__":
+    if st.session_state['logged_in']:
+        main_app()
+    else:
+        main_login()
