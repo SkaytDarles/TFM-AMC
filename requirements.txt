@@ -1,0 +1,7 @@
+firebase-admin
+google-generativeai
+feedparser
+beautifulsoup4
+requests
+python-dotenv
+functions-framework
