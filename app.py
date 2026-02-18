@@ -25,7 +25,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- CSS PERSONALIZADO (BOTONES, TABS, CHECKBOXES) ---
+# --- CSS PERSONALIZADO ---
 st.markdown("""
 <style>
     /* Botones Estilo Cyber/Teal */
@@ -79,8 +79,6 @@ st.markdown("""
 # --- CONSTANTES ---
 REMITENTE_EMAIL = "darlesskayt@gmail.com"
 REMITENTE_PASSWORD = "dgwafnrnahcvgpjz" 
-
-# CONFIGURACIÓN DEL UMBRAL DE CONFIANZA
 MIN_SCORE_IA = 75
 
 LISTA_DEPARTAMENTOS = [
@@ -106,7 +104,7 @@ QUERIES_DEPT = {
 }
 
 # ==========================================
-# 2. UTILIDADES DE CONEXIÓN Y DATOS
+# 2. UTILIDADES
 # ==========================================
 def hash_pass(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
@@ -186,7 +184,6 @@ def buscador_inteligente():
         my_bar.progress(int((current_step / total_steps) * 100), text=f"Escaneando: {dept}")
         
         try:
-            # Busqueda
             resultados = list(ddgs.text(f"{query} noticias recientes", region="wt-wt", timelimit="d", max_results=2))
             
             for r in resultados:
@@ -196,14 +193,11 @@ def buscador_inteligente():
 
                 if not titulo or not link: continue
                 
-                # Duplicados
                 docs = db.collection('news_articles').where(filter=FieldFilter('title', '==', titulo)).limit(1).stream()
                 if list(docs): continue
 
-                # Análisis IA
                 analisis = analizar_con_gemini(body, titulo, dept)
                 
-                # Guardar
                 db.collection('news_articles').add({
                     "title": analisis.get('titulo_mejorado', titulo),
                     "url": link,
@@ -224,17 +218,14 @@ def buscador_inteligente():
     return count_news
 
 # ==========================================
-# 4. EMAIL INTELIGENTE (ASUNTO DINÁMICO)
+# 4. EMAIL INTELIGENTE
 # ==========================================
 def enviar_reporte_email(news_list, dest, nombre, areas_contexto):
     if not news_list: return False
     
-    # Asunto Dinámico
     fecha_str = datetime.datetime.now().strftime("%d %b")
-    # Calcular categoría dominante o general
     deptos = list(set([n['analysis']['departamento'] for n in news_list]))
     cat_str = deptos[0] if len(deptos) == 1 else "Resumen Ejecutivo"
-    
     subject = f"AMC Daily: {cat_str} - {fecha_str}"
 
     try:
@@ -265,7 +256,7 @@ def enviar_reporte_email(news_list, dest, nombre, areas_contexto):
                 <p style="color:#888; font-size:12px;">{fecha_str}</p>
             </div>
             <div style="padding:20px;">
-                <p>Hola {nombre}, aquí tienes tu selección de noticias:</p>
+                <p>Hola, aquí tienes la selección de noticias:</p>
                 <table style="width:100%; border-collapse:collapse;">{rows}</table>
             </div>
         </div>
@@ -278,11 +269,11 @@ def enviar_reporte_email(news_list, dest, nombre, areas_contexto):
         server.quit()
         return True
     except Exception as e:
-        print(e)
+        print(f"Error enviando a {dest}: {e}")
         return False
 
 # ==========================================
-# 5. PANTALLA DE ACCESO (LOGIN/REGISTRO)
+# 5. LOGIN
 # ==========================================
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
@@ -316,7 +307,6 @@ def main_login():
                 new_email = st.text_input("Email Corporativo")
                 new_name = st.text_input("Nombre Completo")
                 new_pass = st.text_input("Definir Contraseña", type="password")
-                
                 st.markdown("**Intereses:**")
                 new_intereses = st.multiselect("Departamentos", LISTA_DEPARTAMENTOS, default=LISTA_DEPARTAMENTOS)
                 
@@ -334,16 +324,13 @@ def main_login():
                         else: st.warning("Usuario ya existe.")
 
 # ==========================================
-# 6. DASHBOARD PRINCIPAL (HUMAN-IN-THE-LOOP)
+# 6. DASHBOARD PRINCIPAL
 # ==========================================
 def main_app():
     user = st.session_state['user_info']
-    
-    # Estado para selección de noticias (Checkboxes)
     if 'selected_news' not in st.session_state:
         st.session_state['selected_news'] = set()
 
-    # --- SIDEBAR ---
     with st.sidebar:
         st.title("AMC HUB")
         st.caption(f"👤 {user.get('nombre', 'Analista')}")
@@ -357,15 +344,15 @@ def main_app():
         mis_intereses = st.multiselect("Filtro Áreas:", LISTA_DEPARTAMENTOS, default=user.get('intereses', [])[:3])
         
         st.divider()
-        col_btn1, col_btn2 = st.columns(2)
-        with col_btn1:
+        c_scan, c_save = st.columns(2)
+        with c_scan:
             if st.button("🔄 Escanear"):
                 with st.spinner("Buscando..."):
                     n = buscador_inteligente()
-                    st.toast(f"Escaneo completado: {n} noticias.", icon="✅")
+                    st.toast(f"Escaneo completado: {n} nuevas.", icon="✅")
                     time.sleep(1)
                     st.rerun()
-        with col_btn2:
+        with c_save:
             if st.button("💾 Guardar"):
                 db.collection('users').document(st.session_state['user_email']).update({"intereses": mis_intereses})
                 st.session_state['user_info']['intereses'] = mis_intereses
@@ -373,30 +360,88 @@ def main_app():
 
         st.markdown("---")
         
-        # BOTÓN DE ENVÍO DE SELECCIÓN
+        # --- NUEVA SECCIÓN: GESTIÓN DE DESTINATARIOS ---
+        st.markdown("### 📤 Configuración de Envío")
+        
+        opcion_destinatario = st.radio(
+            "Seleccionar Destinatarios:",
+            ["Mi Correo (Usuario Actual)", "Ingresar Correo Manualmente", "Cargar Lista (Excel/CSV)"]
+        )
+        
+        lista_destinatarios = []
+        
+        if opcion_destinatario == "Mi Correo (Usuario Actual)":
+            lista_destinatarios = [st.session_state['user_email']]
+            st.info(f"Se enviará a: {st.session_state['user_email']}")
+            
+        elif opcion_destinatario == "Ingresar Correo Manualmente":
+            email_manual = st.text_input("Escribe el correo destinatario:")
+            if email_manual:
+                lista_destinatarios = [email_manual]
+                
+        elif opcion_destinatario == "Cargar Lista (Excel/CSV)":
+            uploaded_file = st.file_uploader("Sube tu archivo", type=['csv', 'xlsx'])
+            if uploaded_file:
+                try:
+                    if uploaded_file.name.endswith('.csv'):
+                        df_upload = pd.read_csv(uploaded_file)
+                    else:
+                        df_upload = pd.read_excel(uploaded_file)
+                    
+                    # Detección inteligente de columna email
+                    posibles_cols = [c for c in df_upload.columns if 'email' in c.lower() or 'correo' in c.lower()]
+                    col_email = posibles_cols[0] if posibles_cols else df_upload.columns[0]
+                    
+                    lista_destinatarios = df_upload[col_email].dropna().astype(str).tolist()
+                    st.success(f"Cargados {len(lista_destinatarios)} destinatarios desde columna '{col_email}'.")
+                except Exception as e:
+                    st.error(f"Error leyendo archivo: {e}")
+
+        st.markdown("---")
+        
+        # --- BOTÓN DE ENVÍO ACTUALIZADO ---
         count_sel = len(st.session_state['selected_news'])
-        label_email = f"📧 Enviar ({count_sel})" if count_sel > 0 else "📧 Enviar Selección"
+        label_email = f"🚀 Enviar ({count_sel})" if count_sel > 0 else "🚀 Enviar Selección"
         
         if st.button(label_email, disabled=(count_sel == 0)):
-            # Recuperar objetos completos de cache
-            if 'news_cache' in st.session_state:
+            if not lista_destinatarios:
+                st.error("⚠️ No hay destinatarios definidos.")
+            elif 'news_cache' in st.session_state:
+                # Filtrar noticias seleccionadas
                 to_send = [n for n in st.session_state['news_cache'] if n['title'] in st.session_state['selected_news']]
                 
-                with st.spinner("Enviando newsletter..."):
-                    exito = enviar_reporte_email(to_send, st.session_state['user_email'], user.get('nombre'), mis_intereses)
+                # Barra de progreso para envíos masivos
+                progress_text = "Enviando reportes..."
+                my_bar = st.progress(0, text=progress_text)
                 
-                if exito:
-                    st.toast(f"¡Enviado con éxito a {st.session_state['user_email']}!", icon="🚀")
-                    st.session_state['selected_news'] = set() # Limpiar
+                exitos = 0
+                fallos = 0
+                
+                for i, dest in enumerate(lista_destinatarios):
+                    # Actualizar barra
+                    progreso = int(((i + 1) / len(lista_destinatarios)) * 100)
+                    my_bar.progress(progreso, text=f"Enviando a {dest}...")
+                    
+                    # Enviar
+                    if enviar_reporte_email(to_send, dest, user.get('nombre'), mis_intereses):
+                        exitos += 1
+                    else:
+                        fallos += 1
+                        
+                my_bar.empty()
+                
+                if exitos > 0:
+                    st.toast(f"✅ Enviado con éxito a {exitos} destinatarios!", icon="🚀")
+                    st.session_state['selected_news'] = set() # Limpiar selección
+                    if fallos > 0: st.warning(f"Hubo {fallos} envíos fallidos.")
                     time.sleep(2)
                     st.rerun()
                 else:
-                    st.error("Error al enviar.")
+                    st.error("Falló el envío a todos los destinatarios.")
 
     # --- CONTENIDO CENTRAL ---
     st.title("Centro de Inteligencia")
     
-    # Query Data
     hoy = datetime.datetime.now().replace(hour=0, minute=0, second=0)
     query = db.collection('news_articles')
     if mis_intereses: query = query.where(filter=FieldFilter('analysis.departamento', 'in', mis_intereses))
@@ -408,7 +453,7 @@ def main_app():
     
     docs = query.order_by('published_at', direction=firestore.Query.DESCENDING).limit(50).stream()
     lista_noticias = [d.to_dict() for d in docs]
-    st.session_state['news_cache'] = lista_noticias # Cachear para envío email
+    st.session_state['news_cache'] = lista_noticias 
 
     tab_news, tab_metrics = st.tabs(["📰 Feed de Noticias", "📊 Métricas"])
     
@@ -416,7 +461,6 @@ def main_app():
         if not lista_noticias:
             st.info("📭 Sin noticias. Usa el botón '🔄 Escanear' en la barra lateral.")
         else:
-            # BOTÓN "AUTO-SELECT TOP IA" (MODIFICADO A 75%)
             col_ia_1, col_ia_2 = st.columns([3, 1])
             with col_ia_2:
                 if st.button(f"✨ Auto-selección IA (>{MIN_SCORE_IA})"):
@@ -429,7 +473,6 @@ def main_app():
                     time.sleep(1)
                     st.rerun()
 
-            # RENDER LISTA
             for n in lista_noticias:
                 title = n.get('title')
                 a = n.get('analysis', {})
@@ -437,13 +480,11 @@ def main_app():
                 color = COLORES_DEPT.get(dept, '#888')
                 score = a.get('relevancia_score', 0)
                 
-                # Checkbox
                 is_checked = title in st.session_state['selected_news']
                 
                 with st.container():
                     c_chk, c_line, c_content = st.columns([0.2, 0.1, 4])
                     with c_chk:
-                        # Usamos key única
                         if st.checkbox("", value=is_checked, key=f"chk_{title}"):
                             st.session_state['selected_news'].add(title)
                         else:
@@ -457,7 +498,6 @@ def main_app():
                         st.caption(f"**{dept}** • {n.get('published_at').strftime('%H:%M')}")
                         st.markdown(f"{a.get('resumen_ejecutivo', '...')}")
                         
-                        # IA Badge + Acción (MODIFICADO A 75%)
                         badge_color = "#00E676" if score > MIN_SCORE_IA else "#c9d1d9"
                         border_color = "#00E676" if score > MIN_SCORE_IA else "#444"
                         
