@@ -16,7 +16,7 @@ import google.generativeai as genai
 from duckduckgo_search import DDGS
 
 # ==========================================
-# 1. CONFIGURACIÓN Y ESTILOS (DARK MODE)
+# 1. CONFIGURACIÓN Y ESTILOS (UI/UX FINAL)
 # ==========================================
 st.set_page_config(
     page_title="AMC Intelligence Hub", 
@@ -25,10 +25,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- CSS PERSONALIZADO ---
+# --- CSS PERSONALIZADO (BOTONES, TABS, CHECKBOXES) ---
 st.markdown("""
 <style>
-    /* 1. Botones (Estilo Dark/Teal) */
+    /* Botones Estilo Cyber/Teal */
     div.stButton > button {
         background-color: #0d1117; 
         color: #00c1a9;
@@ -44,51 +44,34 @@ st.markdown("""
         box-shadow: 0px 0px 10px rgba(0, 193, 169, 0.5);
         border-color: #00c1a9;
     }
-    div.stButton > button:active {
-        transform: scale(0.98);
-    }
+    div.stButton > button:active { transform: scale(0.98); }
 
-    /* 2. Pestañas (Tabs) */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        background-color: transparent;
-    }
+    /* Pestañas (Tabs) Dark Mode */
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; background-color: transparent; }
     .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        background-color: #0d1117;
-        color: #8b949e;
-        border: 1px solid #30363d;
-        border-radius: 6px 6px 0px 0px;
-        padding-top: 10px;
-        padding-bottom: 10px;
+        height: 50px; background-color: #0d1117; color: #8b949e;
+        border: 1px solid #30363d; border-radius: 6px 6px 0px 0px;
+        padding: 10px;
     }
     .stTabs [aria-selected="true"] {
-        background-color: #161b22 !important;
-        color: #00c1a9 !important;
-        border: 1px solid #00c1a9;
-        border-bottom: none;
+        background-color: #161b22 !important; color: #00c1a9 !important;
+        border: 1px solid #00c1a9; border-bottom: none;
     }
 
-    /* 3. Ajustes generales */
+    /* Tipografía y Colores */
     h1 { color: #00c1a9 !important; }
     h2, h3 { color: #e6edf3 !important; }
-    p, span, div { color: #c9d1d9; }
+    p, span, div, label { color: #c9d1d9; }
     
-    .ia-badge {
-        background-color: #21262d;
-        color: #00c1a9;
-        padding: 4px 10px;
-        border-radius: 12px;
-        font-size: 0.8rem;
-        border: 1px solid #30363d;
-        display: inline-block;
-        font-weight: bold;
+    /* Inputs */
+    .stTextInput > div > div > input {
+        background-color: #0d1117; color: white; border-color: #30363d;
     }
     
-    .stTextInput > div > div > input {
-        background-color: #0d1117;
-        color: white;
-        border-color: #30363d;
+    /* Badges */
+    .ia-badge {
+        background-color: #21262d; padding: 4px 10px; border-radius: 12px;
+        font-size: 0.8rem; border: 1px solid #30363d; display: inline-block; font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -120,7 +103,7 @@ QUERIES_DEPT = {
 }
 
 # ==========================================
-# 2. UTILIDADES
+# 2. UTILIDADES DE CONEXIÓN Y DATOS
 # ==========================================
 def hash_pass(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
@@ -158,7 +141,7 @@ if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
 # ==========================================
-# 3. LÓGICA DE NEGOCIO
+# 3. LÓGICA DE NEGOCIO (IA & SCRAPING)
 # ==========================================
 def analizar_con_gemini(texto, titulo, dept):
     if "GOOGLE_API_KEY" not in st.secrets:
@@ -166,16 +149,16 @@ def analizar_con_gemini(texto, titulo, dept):
 
     model = genai.GenerativeModel('gemini-1.5-flash')
     prompt = f"""
-    Eres un analista de inteligencia competitiva para AMC Global ({dept}).
-    Analiza: {titulo}
+    Analista AMC Global ({dept}).
+    Noticia: {titulo}
     Texto: {texto[:800]}...
 
-    Salida JSON:
+    Output JSON:
     {{
-        "titulo_mejorado": "Título breve en español",
-        "resumen": "Resumen ejecutivo de 30 palabras.",
+        "titulo_mejorado": "Título breve español",
+        "resumen": "Resumen ejecutivo 30 palabras.",
         "accion": "Sugerencia estratégica.",
-        "score": (número entero 0-100)
+        "score": (0-100 entero)
     }}
     """
     try:
@@ -189,11 +172,9 @@ def analizar_con_gemini(texto, titulo, dept):
 def buscador_inteligente():
     count_news = 0
     ddgs = DDGS()
-    news_batch = [] 
     
-    progress_text = "Iniciando escaneo de fuentes abiertas..."
+    progress_text = "🕵️ Iniciando escaneo de fuentes abiertas..."
     my_bar = st.progress(0, text=progress_text)
-
     total_steps = len(QUERIES_DEPT)
     current_step = 0
     
@@ -202,6 +183,7 @@ def buscador_inteligente():
         my_bar.progress(int((current_step / total_steps) * 100), text=f"Escaneando: {dept}")
         
         try:
+            # Busqueda
             resultados = list(ddgs.text(f"{query} noticias recientes", region="wt-wt", timelimit="d", max_results=2))
             
             for r in resultados:
@@ -211,12 +193,15 @@ def buscador_inteligente():
 
                 if not titulo or not link: continue
                 
+                # Duplicados
                 docs = db.collection('news_articles').where(filter=FieldFilter('title', '==', titulo)).limit(1).stream()
                 if list(docs): continue
 
+                # Análisis IA
                 analisis = analizar_con_gemini(body, titulo, dept)
                 
-                doc_data = {
+                # Guardar
+                db.collection('news_articles').add({
                     "title": analisis.get('titulo_mejorado', titulo),
                     "url": link,
                     "published_at": datetime.datetime.now(),
@@ -227,25 +212,33 @@ def buscador_inteligente():
                         "accion_sugerida": analisis.get('accion'),
                         "relevancia_score": analisis.get('score')
                     }
-                }
-                
-                db.collection('news_articles').add(doc_data)
-                news_batch.append(doc_data)
+                })
                 count_news += 1
                 time.sleep(0.5)
-                
-        except Exception: continue
+        except: continue
 
     my_bar.empty()
-    return news_batch
+    return count_news
 
-def enviar_reporte_email(news_list, dest, nombre):
+# ==========================================
+# 4. EMAIL INTELIGENTE (ASUNTO DINÁMICO)
+# ==========================================
+def enviar_reporte_email(news_list, dest, nombre, areas_contexto):
     if not news_list: return False
+    
+    # Asunto Dinámico
+    fecha_str = datetime.datetime.now().strftime("%d %b")
+    # Calcular categoría dominante o general
+    deptos = list(set([n['analysis']['departamento'] for n in news_list]))
+    cat_str = deptos[0] if len(deptos) == 1 else "Resumen Ejecutivo"
+    
+    subject = f"AMC Daily: {cat_str} - {fecha_str}"
+
     try:
         msg = MIMEMultipart()
         msg['From'] = REMITENTE_EMAIL
         msg['To'] = dest
-        msg['Subject'] = Header(f"🔓 AMC Daily: {len(news_list)} Nuevos Insights", 'utf-8')
+        msg['Subject'] = Header(subject, 'utf-8')
 
         rows = ""
         for n in news_list:
@@ -266,9 +259,10 @@ def enviar_reporte_email(news_list, dest, nombre):
         <div style="font-family:Helvetica, sans-serif; max-width:600px; margin:0 auto; border:1px solid #e0e0e0;">
             <div style="background:#161b22; padding:20px; text-align:center;">
                 <h2 style="color:#00c1a9; margin:0;">AMC INTELLIGENCE</h2>
+                <p style="color:#888; font-size:12px;">{fecha_str}</p>
             </div>
             <div style="padding:20px;">
-                <p>Hola {nombre}, este es tu resumen personalizado:</p>
+                <p>Hola {nombre}, aquí tienes tu selección de noticias:</p>
                 <table style="width:100%; border-collapse:collapse;">{rows}</table>
             </div>
         </div>
@@ -280,10 +274,12 @@ def enviar_reporte_email(news_list, dest, nombre):
         server.send_message(msg)
         server.quit()
         return True
-    except: return False
+    except Exception as e:
+        print(e)
+        return False
 
 # ==========================================
-# 4. LOGIN (CON SELECCIÓN DE DEPARTAMENTOS)
+# 5. PANTALLA DE ACCESO (LOGIN/REGISTRO)
 # ==========================================
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
@@ -301,12 +297,15 @@ def main_login():
                 if st.form_submit_button("ACCESO"):
                     if not db: st.stop()
                     doc = db.collection('users').document(email).get()
-                    if doc.exists and (doc.to_dict().get('password') == password or doc.to_dict().get('password') == hash_pass(password)):
-                        st.session_state['logged_in'] = True
-                        st.session_state['user_email'] = email
-                        st.session_state['user_info'] = doc.to_dict()
-                        st.rerun()
-                    else: st.error("Datos incorrectos.")
+                    if doc.exists:
+                        data = doc.to_dict()
+                        if data.get('password') == hash_pass(password):
+                            st.session_state['logged_in'] = True
+                            st.session_state['user_email'] = email
+                            st.session_state['user_info'] = data
+                            st.rerun()
+                        else: st.error("Contraseña incorrecta.")
+                    else: st.error("Usuario no encontrado.")
 
         with tab2:
             with st.form("register_form"):
@@ -315,16 +314,13 @@ def main_login():
                 new_name = st.text_input("Nombre Completo")
                 new_pass = st.text_input("Definir Contraseña", type="password")
                 
-                # MODIFICACIÓN 1: Selección de intereses al registrarse
-                st.markdown("**Selecciona tus áreas de interés:**")
+                st.markdown("**Intereses:**")
                 new_intereses = st.multiselect("Departamentos", LISTA_DEPARTAMENTOS, default=LISTA_DEPARTAMENTOS)
                 
                 if st.form_submit_button("CREAR CUENTA"):
                     if new_email and new_name and new_pass:
                         if not db.collection('users').document(new_email).get().exists:
-                            # Si el usuario borra todo, le asignamos todo por defecto para que no quede vacío
                             final_intereses = new_intereses if new_intereses else LISTA_DEPARTAMENTOS
-                            
                             db.collection('users').document(new_email).set({
                                 "nombre": new_name, 
                                 "password": hash_pass(new_pass),
@@ -333,14 +329,18 @@ def main_login():
                             })
                             st.success("Cuenta creada. Ingresa en la pestaña 'INGRESAR'.")
                         else: st.warning("Usuario ya existe.")
-                    else: st.warning("Completa todos los campos.")
 
 # ==========================================
-# 5. DASHBOARD PRINCIPAL (CON EMAIL FILTRADO)
+# 6. DASHBOARD PRINCIPAL (HUMAN-IN-THE-LOOP)
 # ==========================================
 def main_app():
     user = st.session_state['user_info']
     
+    # Estado para selección de noticias (Checkboxes)
+    if 'selected_news' not in st.session_state:
+        st.session_state['selected_news'] = set()
+
+    # --- SIDEBAR ---
     with st.sidebar:
         st.title("AMC HUB")
         st.caption(f"👤 {user.get('nombre', 'Analista')}")
@@ -354,48 +354,46 @@ def main_app():
         mis_intereses = st.multiselect("Filtro Áreas:", LISTA_DEPARTAMENTOS, default=user.get('intereses', [])[:3])
         
         st.divider()
-        st.markdown("**Acciones Rápidas**")
-        
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
             if st.button("🔄 Escanear"):
                 with st.spinner("Buscando..."):
-                    buscador_inteligente()
+                    n = buscador_inteligente()
+                    st.toast(f"Escaneo completado: {n} noticias.", icon="✅")
+                    time.sleep(1)
                     st.rerun()
-        
         with col_btn2:
             if st.button("💾 Guardar"):
                 db.collection('users').document(st.session_state['user_email']).update({"intereses": mis_intereses})
-                # Actualizar sesión local también
                 st.session_state['user_info']['intereses'] = mis_intereses
                 st.toast("Preferencias guardadas")
 
         st.markdown("---")
-        # MODIFICACIÓN 2: Lógica de Email Filtrado
-        if st.button("📧 Enviar Reporte (Email)"):
-            hoy = datetime.datetime.now().replace(hour=0, minute=0, second=0)
-            
-            # 1. Traer noticias de hoy
-            docs = db.collection('news_articles').where(filter=FieldFilter('published_at', '>=', hoy)).stream()
-            lista_cruda = [d.to_dict() for d in docs]
-            
-            # 2. Filtrar SOLO las que coinciden con los intereses del usuario
-            # Usamos los intereses guardados en sesión (user['intereses'])
-            lista_filtrada = [
-                n for n in lista_cruda 
-                if n.get('analysis', {}).get('departamento') in user.get('intereses', [])
-            ]
-            
-            if lista_filtrada:
-                exito = enviar_reporte_email(lista_filtrada, st.session_state['user_email'], user.get('nombre'))
-                if exito: st.success(f"✅ Reporte enviado ({len(lista_filtrada)} noticias de tus áreas).")
-                else: st.error("Error al enviar")
-            else:
-                st.warning("No hay noticias de hoy que coincidan con tus áreas de interés.")
+        
+        # BOTÓN DE ENVÍO DE SELECCIÓN
+        count_sel = len(st.session_state['selected_news'])
+        label_email = f"📧 Enviar ({count_sel})" if count_sel > 0 else "📧 Enviar Selección"
+        
+        if st.button(label_email, disabled=(count_sel == 0)):
+            # Recuperar objetos completos de cache
+            if 'news_cache' in st.session_state:
+                to_send = [n for n in st.session_state['news_cache'] if n['title'] in st.session_state['selected_news']]
+                
+                with st.spinner("Enviando newsletter..."):
+                    exito = enviar_reporte_email(to_send, st.session_state['user_email'], user.get('nombre'), mis_intereses)
+                
+                if exito:
+                    st.toast(f"¡Enviado con éxito a {st.session_state['user_email']}!", icon="🚀")
+                    st.session_state['selected_news'] = set() # Limpiar
+                    time.sleep(2)
+                    st.rerun()
+                else:
+                    st.error("Error al enviar.")
 
-    # --- CONTENIDO ---
+    # --- CONTENIDO CENTRAL ---
     st.title("Centro de Inteligencia")
     
+    # Query Data
     hoy = datetime.datetime.now().replace(hour=0, minute=0, second=0)
     query = db.collection('news_articles')
     if mis_intereses: query = query.where(filter=FieldFilter('analysis.departamento', 'in', mis_intereses))
@@ -405,49 +403,80 @@ def main_app():
         ayer = hoy - datetime.timedelta(days=1)
         query = query.where(filter=FieldFilter('published_at', '>=', ayer)).where(filter=FieldFilter('published_at', '<', hoy))
     
+    docs = query.order_by('published_at', direction=firestore.Query.DESCENDING).limit(50).stream()
+    lista_noticias = [d.to_dict() for d in docs]
+    st.session_state['news_cache'] = lista_noticias # Cachear para envío email
+
     tab_news, tab_metrics = st.tabs(["📰 Feed de Noticias", "📊 Métricas"])
     
     with tab_news:
-        docs = query.order_by('published_at', direction=firestore.Query.DESCENDING).limit(30).stream()
-        lista_noticias = [d.to_dict() for d in docs]
-        
         if not lista_noticias:
             st.info("📭 Sin noticias. Usa el botón '🔄 Escanear' en la barra lateral.")
-        
-        for n in lista_noticias:
-            a = n.get('analysis', {})
-            dept = a.get('departamento', 'General')
-            color = COLORES_DEPT.get(dept, '#888')
-            score = a.get('relevancia_score', 0)
-            
-            with st.container():
-                cols = st.columns([0.1, 4])
-                with cols[0]:
-                    st.markdown(f"<div style='height:100%; width:4px; background-color:{color}; border-radius:4px;'></div>", unsafe_allow_html=True)
-                with cols[1]:
-                    st.markdown(f"### [{n.get('title')}]({n.get('url')})")
-                    st.caption(f"**{dept}** • {n.get('published_at').strftime('%H:%M %p')}")
-                    st.markdown(f"{a.get('resumen_ejecutivo', '...')}")
+        else:
+            # BOTÓN "AUTO-SELECT TOP IA"
+            col_ia_1, col_ia_2 = st.columns([3, 1])
+            with col_ia_2:
+                if st.button("✨ Auto-selección IA (>80)"):
+                    added = 0
+                    for n in lista_noticias:
+                        if n['analysis'].get('relevancia_score', 0) > 80:
+                            st.session_state['selected_news'].add(n['title'])
+                            added += 1
+                    st.toast(f"IA seleccionó {added} noticias relevantes.", icon="🤖")
+                    time.sleep(1)
+                    st.rerun()
+
+            # RENDER LISTA
+            for n in lista_noticias:
+                title = n.get('title')
+                a = n.get('analysis', {})
+                dept = a.get('departamento', 'General')
+                color = COLORES_DEPT.get(dept, '#888')
+                score = a.get('relevancia_score', 0)
+                
+                # Checkbox
+                is_checked = title in st.session_state['selected_news']
+                
+                with st.container():
+                    c_chk, c_line, c_content = st.columns([0.2, 0.1, 4])
+                    with c_chk:
+                        # Usamos key única
+                        if st.checkbox("", value=is_checked, key=f"chk_{title}"):
+                            st.session_state['selected_news'].add(title)
+                        else:
+                            st.session_state['selected_news'].discard(title)
+                            
+                    with c_line:
+                        st.markdown(f"<div style='height:100%; width:4px; background-color:{color}; border-radius:4px;'></div>", unsafe_allow_html=True)
                     
-                    st.markdown(f"""
-                        <div style="margin-top:10px; display:flex; align-items:center; gap:10px;">
-                            <span style="background-color:rgba(0,193,169,0.1); color:#00c1a9; padding:4px 8px; border-radius:4px; font-size:0.9em; font-weight:bold;">
+                    with c_content:
+                        st.markdown(f"### [{title}]({n.get('url')})")
+                        st.caption(f"**{dept}** • {n.get('published_at').strftime('%H:%M')}")
+                        st.markdown(f"{a.get('resumen_ejecutivo', '...')}")
+                        
+                        # IA Badge + Acción
+                        badge_color = "#00E676" if score > 80 else "#c9d1d9"
+                        border_color = "#00E676" if score > 80 else "#444"
+                        
+                        st.markdown(f"""
+                        <div style="margin-top:10px; display:flex; gap:10px;">
+                            <span style="background:rgba(0,193,169,0.1); color:#00c1a9; padding:2px 8px; border-radius:4px; font-size:0.85em;">
                                 💡 {a.get('accion_sugerida', 'Revisar')}
                             </span>
-                            <span class="ia-badge">
+                            <span class="ia-badge" style="color:{badge_color}; border-color:{border_color};">
                                 IA Score: {score}/100
                             </span>
                         </div>
-                    """, unsafe_allow_html=True)
-                st.divider()
+                        """, unsafe_allow_html=True)
+                    st.divider()
 
     with tab_metrics:
-        all_docs = db.collection('news_articles').limit(100).stream()
-        df = pd.DataFrame([d.to_dict()['analysis'] for d in all_docs if 'analysis' in d.to_dict()])
-        if not df.empty:
-            c1, c2 = st.columns(2)
-            with c1: st.plotly_chart(px.pie(df, names='departamento', color='departamento', color_discrete_map=COLORES_DEPT, hole=0.4), use_container_width=True)
-            with c2: st.plotly_chart(px.bar(df.groupby('departamento')['relevancia_score'].mean().reset_index(), x='departamento', y='relevancia_score', color='departamento', color_discrete_map=COLORES_DEPT), use_container_width=True)
+        if lista_noticias:
+            df = pd.DataFrame([n['analysis'] for n in lista_noticias if 'analysis' in n])
+            if not df.empty:
+                c1, c2 = st.columns(2)
+                with c1: st.plotly_chart(px.pie(df, names='departamento', color='departamento', color_discrete_map=COLORES_DEPT, hole=0.4), use_container_width=True)
+                with c2: st.plotly_chart(px.bar(df.groupby('departamento')['relevancia_score'].mean().reset_index(), x='departamento', y='relevancia_score', color='departamento', color_discrete_map=COLORES_DEPT), use_container_width=True)
 
 if __name__ == "__main__":
     if st.session_state['logged_in']: main_app()
