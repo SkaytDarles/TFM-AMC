@@ -16,7 +16,7 @@ import google.generativeai as genai
 from duckduckgo_search import DDGS
 
 # ==========================================
-# 1. CONFIGURACIÓN Y ESTILOS (CSS MEJORADO)
+# 1. CONFIGURACIÓN Y ESTILOS (CORREGIDOS PARA DARK MODE)
 # ==========================================
 st.set_page_config(
     page_title="AMC Intelligence Hub", 
@@ -25,44 +25,77 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- CSS PERSONALIZADO (AQUÍ ESTÁ LA MAGIA VISUAL) ---
+# --- CSS PERSONALIZADO ---
+# Aquí es donde cambiamos los colores para que coincidan con el tema oscuro
 st.markdown("""
 <style>
-    /* 1. Homologación de Botones */
+    /* 1. Botones (Estilo Dark/Teal) */
     div.stButton > button {
-        background-color: #161b22; 
+        background-color: #0d1117; 
         color: #00c1a9;
         border: 1px solid #00c1a9;
-        border-radius: 8px;
+        border-radius: 6px;
         transition: all 0.3s ease;
-        width: 100%;
-        font-weight: bold;
+        font-weight: 600;
+        letter-spacing: 0.5px;
     }
     div.stButton > button:hover {
         background-color: #00c1a9;
-        color: white;
-        border: 1px solid #00c1a9;
-        box-shadow: 0px 4px 15px rgba(0, 193, 169, 0.4);
+        color: #ffffff;
+        box-shadow: 0px 0px 10px rgba(0, 193, 169, 0.5);
+        border-color: #00c1a9;
     }
     div.stButton > button:active {
         transform: scale(0.98);
     }
 
-    /* 2. Tabs más limpias */
-    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
-    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #f0f2f6; border-radius: 4px 4px 0px 0px; gap: 1px; padding-top: 10px; padding-bottom: 10px; }
-    .stTabs [aria-selected="true"] { background-color: #ffffff; border-top: 2px solid #00c1a9; }
+    /* 2. Pestañas (Tabs) - CORRECCIÓN DEL FONDO BLANCO */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background-color: transparent;
+    }
     
-    /* 3. Títulos y Badges */
+    /* Pestaña NO seleccionada */
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        background-color: #0d1117; /* Fondo oscuro */
+        color: #8b949e; /* Texto gris */
+        border: 1px solid #30363d;
+        border-radius: 6px 6px 0px 0px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+    }
+    
+    /* Pestaña SELECCIONADA */
+    .stTabs [aria-selected="true"] {
+        background-color: #161b22 !important; /* Fondo un poco más claro pero oscuro */
+        color: #00c1a9 !important; /* Texto Teal */
+        border: 1px solid #00c1a9;
+        border-bottom: none;
+    }
+
+    /* 3. Ajustes generales del Dashboard */
     h1 { color: #00c1a9 !important; }
+    h2, h3 { color: #e6edf3 !important; }
+    p, span, div { color: #c9d1d9; }
+    
+    /* Badges */
     .ia-badge {
-        background-color: #2b3137;
-        color: #c9d1d9;
+        background-color: #21262d;
+        color: #00c1a9;
         padding: 4px 10px;
         border-radius: 12px;
         font-size: 0.8rem;
-        border: 1px solid #444;
+        border: 1px solid #30363d;
         display: inline-block;
+        font-weight: bold;
+    }
+    
+    /* Inputs de texto (Login) */
+    .stTextInput > div > div > input {
+        background-color: #0d1117;
+        color: white;
+        border-color: #30363d;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -165,7 +198,6 @@ def buscador_inteligente():
     ddgs = DDGS()
     news_batch = [] 
     
-    # Barra de progreso visual
     progress_text = "Iniciando escaneo de fuentes abiertas..."
     my_bar = st.progress(0, text=progress_text)
 
@@ -267,6 +299,7 @@ def main_login():
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
         st.markdown("<br><h1 style='text-align:center;'>AMC GLOBAL</h1>", unsafe_allow_html=True)
+        # TABS AHORA TENDRÁN EL COLOR OSCURO DEFINIDO EN CSS
         tab1, tab2 = st.tabs(["🔐 INGRESAR", "📝 REGISTRARSE"])
         
         with tab1:
@@ -304,7 +337,6 @@ def main_login():
 def main_app():
     user = st.session_state['user_info']
     
-    # --- SIDEBAR MEJORADA ---
     with st.sidebar:
         st.title("AMC HUB")
         st.caption(f"👤 {user.get('nombre', 'Analista')}")
@@ -317,7 +349,6 @@ def main_app():
         filtro_tiempo = st.radio("Período:", ["Hoy (Tiempo Real)", "Ayer", "Histórico 7 días"])
         mis_intereses = st.multiselect("Filtro Áreas:", LISTA_DEPARTAMENTOS, default=user.get('intereses', [])[:3])
         
-        # BOTONES HOMOLOGADOS
         st.divider()
         st.markdown("**Acciones Rápidas**")
         
@@ -333,20 +364,18 @@ def main_app():
                 db.collection('users').document(st.session_state['user_email']).update({"intereses": mis_intereses})
                 st.toast("Preferencias guardadas")
 
-        # AQUÍ ESTÁ EL ENVÍO DE EMAIL QUE FALTABA
         st.markdown("---")
         if st.button("📧 Enviar Reporte (Email)"):
-            # Obtenemos las noticias visibles hoy para enviar
             hoy = datetime.datetime.now().replace(hour=0, minute=0, second=0)
             docs = db.collection('news_articles').where(filter=FieldFilter('published_at', '>=', hoy)).stream()
             lista_envio = [d.to_dict() for d in docs]
             
             if lista_envio:
                 exito = enviar_reporte_email(lista_envio, st.session_state['user_email'], user.get('nombre'))
-                if exito: st.success("✅ Reporte enviado a tu correo")
+                if exito: st.success("✅ Reporte enviado")
                 else: st.error("Error al enviar")
             else:
-                st.warning("No hay noticias de hoy para enviar.")
+                st.warning("No hay noticias hoy.")
 
     # --- CONTENIDO ---
     st.title("Centro de Inteligencia")
@@ -375,21 +404,16 @@ def main_app():
             color = COLORES_DEPT.get(dept, '#888')
             score = a.get('relevancia_score', 0)
             
+            # Tarjeta de Noticia (Estilo Newsletter Dark)
             with st.container():
                 cols = st.columns([0.1, 4])
                 with cols[0]:
                     st.markdown(f"<div style='height:100%; width:4px; background-color:{color}; border-radius:4px;'></div>", unsafe_allow_html=True)
                 with cols[1]:
-                    # Título y Link
                     st.markdown(f"### [{n.get('title')}]({n.get('url')})")
-                    
-                    # Metadata en una línea (Dept + Fecha)
                     st.caption(f"**{dept}** • {n.get('published_at').strftime('%H:%M %p')}")
-                    
-                    # Resumen
                     st.markdown(f"{a.get('resumen_ejecutivo', '...')}")
                     
-                    # ACCIÓN + SCORE SOBRIO (BADGE)
                     st.markdown(f"""
                         <div style="margin-top:10px; display:flex; align-items:center; gap:10px;">
                             <span style="background-color:rgba(0,193,169,0.1); color:#00c1a9; padding:4px 8px; border-radius:4px; font-size:0.9em; font-weight:bold;">
@@ -403,7 +427,6 @@ def main_app():
                 st.divider()
 
     with tab_metrics:
-        # (Código de gráficas igual, solo visualización)
         all_docs = db.collection('news_articles').limit(100).stream()
         df = pd.DataFrame([d.to_dict()['analysis'] for d in all_docs if 'analysis' in d.to_dict()])
         if not df.empty:
