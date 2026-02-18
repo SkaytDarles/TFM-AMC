@@ -45,23 +45,19 @@ COLORES_DEPT = {
 }
 
 # ==========================================
-# 2. CONEXIÓN FIREBASE
+# 2. CONEXIÓN FIREBASE HÍBRIDA (SIRVE PARA LOCAL Y NUBE)
 # ==========================================
-if 'logged_in' not in st.session_state:
-    st.session_state['logged_in'] = False
-if 'user_email' not in st.session_state:
-    st.session_state['user_email'] = ""
-
 if not firebase_admin._apps:
     try:
-        try:
-            cred = credentials.Certificate('serviceAccountKey.json')
-        except:
-            key_dict = json.loads(st.secrets["FIREBASE_KEY"])
-            cred = credentials.Certificate(key_dict)
-        firebase_admin.initialize_app(cred)
-    except Exception as e:
-        pass 
+        # INTENTO 1: Buscar en la Nube (Secrets)
+        key_content = st.secrets["FIREBASE_KEY"]["text_key"]
+        key_dict = json.loads(key_content)
+        cred = credentials.Certificate(key_dict)
+    except:
+        # INTENTO 2: Buscar en Local (Tu PC)
+        cred = credentials.Certificate('serviceAccountKey.json')
+        
+    firebase_admin.initialize_app(cred)
 
 db = firestore.client()
 
@@ -310,4 +306,5 @@ else:
                 st.markdown("#### Score de Impacto")
                 grp = df.groupby('Dept')['Score'].mean().reset_index()
                 fig2 = px.bar(grp, x='Dept', y='Score', color='Dept', color_discrete_map=COLORES_DEPT)
+
                 st.plotly_chart(fig2, use_container_width=True)
