@@ -45,27 +45,23 @@ COLORES_DEPT = {
 }
 
 # ==========================================
-# CONEXIÓN FIREBASE (MODO HÍBRIDO)
+# CONEXIÓN FIREBASE (MÉTODO TOML DIRECTO)
 # ==========================================
-# Este bloque funciona tanto en tu PC como en la Nube sin tocar nada.
-
 if not firebase_admin._apps:
     try:
-        # INTENTO 1: Buscar en la Nube (Secrets de Streamlit)
-        # Leemos la llave desde la configuración segura de la web que acabas de guardar
-        key_content = st.secrets["FIREBASE_KEY"]["text_key"]
-        # Convertimos el texto a diccionario JSON
-        key_dict = json.loads(key_content)
+        # INTENTO 1: Buscar en la Nube (Secrets Nativos)
+        # Streamlit ya convierte el TOML a un diccionario de Python automáticamente.
+        # ¡Ya no necesitamos json.loads!
+        key_dict = dict(st.secrets["FIREBASE_KEY"])
         cred = credentials.Certificate(key_dict)
         firebase_admin.initialize_app(cred)
     except Exception as e:
         # INTENTO 2: Buscar en Local (Tu PC)
-        # Si falla lo de arriba (porque estás en tu casa), busca el archivo
         try:
             cred = credentials.Certificate('serviceAccountKey.json')
             firebase_admin.initialize_app(cred)
         except:
-            st.error(f"❌ Error de conexión: No se encuentra la llave. Detalle: {e}")
+            st.error(f"❌ Error de conexión: {e}")
             st.stop()
 
 db = firestore.client()
@@ -316,6 +312,7 @@ else:
                 fig2 = px.bar(grp, x='Dept', y='Score', color='Dept', color_discrete_map=COLORES_DEPT)
 
                 st.plotly_chart(fig2, use_container_width=True)
+
 
 
 
