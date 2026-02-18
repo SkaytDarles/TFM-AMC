@@ -16,7 +16,7 @@ import google.generativeai as genai
 from duckduckgo_search import DDGS
 
 # ==========================================
-# 1. CONFIGURACIÓN Y ESTILOS (CORREGIDOS PARA DARK MODE)
+# 1. CONFIGURACIÓN Y ESTILOS (DARK MODE)
 # ==========================================
 st.set_page_config(
     page_title="AMC Intelligence Hub", 
@@ -26,7 +26,6 @@ st.set_page_config(
 )
 
 # --- CSS PERSONALIZADO ---
-# Aquí es donde cambiamos los colores para que coincidan con el tema oscuro
 st.markdown("""
 <style>
     /* 1. Botones (Estilo Dark/Teal) */
@@ -49,37 +48,32 @@ st.markdown("""
         transform: scale(0.98);
     }
 
-    /* 2. Pestañas (Tabs) - CORRECCIÓN DEL FONDO BLANCO */
+    /* 2. Pestañas (Tabs) */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
         background-color: transparent;
     }
-    
-    /* Pestaña NO seleccionada */
     .stTabs [data-baseweb="tab"] {
         height: 50px;
-        background-color: #0d1117; /* Fondo oscuro */
-        color: #8b949e; /* Texto gris */
+        background-color: #0d1117;
+        color: #8b949e;
         border: 1px solid #30363d;
         border-radius: 6px 6px 0px 0px;
         padding-top: 10px;
         padding-bottom: 10px;
     }
-    
-    /* Pestaña SELECCIONADA */
     .stTabs [aria-selected="true"] {
-        background-color: #161b22 !important; /* Fondo un poco más claro pero oscuro */
-        color: #00c1a9 !important; /* Texto Teal */
+        background-color: #161b22 !important;
+        color: #00c1a9 !important;
         border: 1px solid #00c1a9;
         border-bottom: none;
     }
 
-    /* 3. Ajustes generales del Dashboard */
+    /* 3. Ajustes generales */
     h1 { color: #00c1a9 !important; }
     h2, h3 { color: #e6edf3 !important; }
     p, span, div { color: #c9d1d9; }
     
-    /* Badges */
     .ia-badge {
         background-color: #21262d;
         color: #00c1a9;
@@ -91,7 +85,6 @@ st.markdown("""
         font-weight: bold;
     }
     
-    /* Inputs de texto (Login) */
     .stTextInput > div > div > input {
         background-color: #0d1117;
         color: white;
@@ -275,7 +268,7 @@ def enviar_reporte_email(news_list, dest, nombre):
                 <h2 style="color:#00c1a9; margin:0;">AMC INTELLIGENCE</h2>
             </div>
             <div style="padding:20px;">
-                <p>Hola {nombre}, resumen de inteligencia:</p>
+                <p>Hola {nombre}, este es tu resumen personalizado:</p>
                 <table style="width:100%; border-collapse:collapse;">{rows}</table>
             </div>
         </div>
@@ -290,7 +283,7 @@ def enviar_reporte_email(news_list, dest, nombre):
     except: return False
 
 # ==========================================
-# 4. LOGIN
+# 4. LOGIN (CON SELECCIÓN DE DEPARTAMENTOS)
 # ==========================================
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
@@ -299,7 +292,6 @@ def main_login():
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
         st.markdown("<br><h1 style='text-align:center;'>AMC GLOBAL</h1>", unsafe_allow_html=True)
-        # TABS AHORA TENDRÁN EL COLOR OSCURO DEFINIDO EN CSS
         tab1, tab2 = st.tabs(["🔐 INGRESAR", "📝 REGISTRARSE"])
         
         with tab1:
@@ -318,21 +310,33 @@ def main_login():
 
         with tab2:
             with st.form("register_form"):
+                st.markdown("### Nueva Cuenta")
                 new_email = st.text_input("Email Corporativo")
                 new_name = st.text_input("Nombre Completo")
                 new_pass = st.text_input("Definir Contraseña", type="password")
+                
+                # MODIFICACIÓN 1: Selección de intereses al registrarse
+                st.markdown("**Selecciona tus áreas de interés:**")
+                new_intereses = st.multiselect("Departamentos", LISTA_DEPARTAMENTOS, default=LISTA_DEPARTAMENTOS)
+                
                 if st.form_submit_button("CREAR CUENTA"):
                     if new_email and new_name and new_pass:
                         if not db.collection('users').document(new_email).get().exists:
+                            # Si el usuario borra todo, le asignamos todo por defecto para que no quede vacío
+                            final_intereses = new_intereses if new_intereses else LISTA_DEPARTAMENTOS
+                            
                             db.collection('users').document(new_email).set({
-                                "nombre": new_name, "password": hash_pass(new_pass),
-                                "intereses": LISTA_DEPARTAMENTOS, "created_at": datetime.datetime.now()
+                                "nombre": new_name, 
+                                "password": hash_pass(new_pass),
+                                "intereses": final_intereses, 
+                                "created_at": datetime.datetime.now()
                             })
-                            st.success("Cuenta creada. Ingresa en la otra pestaña.")
+                            st.success("Cuenta creada. Ingresa en la pestaña 'INGRESAR'.")
                         else: st.warning("Usuario ya existe.")
+                    else: st.warning("Completa todos los campos.")
 
 # ==========================================
-# 5. DASHBOARD PRINCIPAL
+# 5. DASHBOARD PRINCIPAL (CON EMAIL FILTRADO)
 # ==========================================
 def main_app():
     user = st.session_state['user_info']
@@ -362,20 +366,32 @@ def main_app():
         with col_btn2:
             if st.button("💾 Guardar"):
                 db.collection('users').document(st.session_state['user_email']).update({"intereses": mis_intereses})
+                # Actualizar sesión local también
+                st.session_state['user_info']['intereses'] = mis_intereses
                 st.toast("Preferencias guardadas")
 
         st.markdown("---")
+        # MODIFICACIÓN 2: Lógica de Email Filtrado
         if st.button("📧 Enviar Reporte (Email)"):
             hoy = datetime.datetime.now().replace(hour=0, minute=0, second=0)
-            docs = db.collection('news_articles').where(filter=FieldFilter('published_at', '>=', hoy)).stream()
-            lista_envio = [d.to_dict() for d in docs]
             
-            if lista_envio:
-                exito = enviar_reporte_email(lista_envio, st.session_state['user_email'], user.get('nombre'))
-                if exito: st.success("✅ Reporte enviado")
+            # 1. Traer noticias de hoy
+            docs = db.collection('news_articles').where(filter=FieldFilter('published_at', '>=', hoy)).stream()
+            lista_cruda = [d.to_dict() for d in docs]
+            
+            # 2. Filtrar SOLO las que coinciden con los intereses del usuario
+            # Usamos los intereses guardados en sesión (user['intereses'])
+            lista_filtrada = [
+                n for n in lista_cruda 
+                if n.get('analysis', {}).get('departamento') in user.get('intereses', [])
+            ]
+            
+            if lista_filtrada:
+                exito = enviar_reporte_email(lista_filtrada, st.session_state['user_email'], user.get('nombre'))
+                if exito: st.success(f"✅ Reporte enviado ({len(lista_filtrada)} noticias de tus áreas).")
                 else: st.error("Error al enviar")
             else:
-                st.warning("No hay noticias hoy.")
+                st.warning("No hay noticias de hoy que coincidan con tus áreas de interés.")
 
     # --- CONTENIDO ---
     st.title("Centro de Inteligencia")
@@ -404,7 +420,6 @@ def main_app():
             color = COLORES_DEPT.get(dept, '#888')
             score = a.get('relevancia_score', 0)
             
-            # Tarjeta de Noticia (Estilo Newsletter Dark)
             with st.container():
                 cols = st.columns([0.1, 4])
                 with cols[0]:
