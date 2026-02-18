@@ -230,7 +230,7 @@ def enviar_email_real(destinatario, nombre, intereses):
     html += """
             <br>
             <center>
-                <a href="https://amc-hub.streamlit.app" style="background:#00c1a9; color:#fff; padding:10px 20px; text-decoration:none; border-radius:4px; font-weight:bold;">Ir al Dashboard</a>
+                <a href="https://amcinth.streamlit.app/" style="background:#00c1a9; color:#fff; padding:10px 20px; text-decoration:none; border-radius:4px; font-weight:bold;">Ir al Dashboard</a>
             </center>
         </div>
     </div></body></html>
@@ -365,3 +365,4 @@ else:
                 st.plotly_chart(fig2, use_container_width=True)
         else:
             st.info("No hay suficientes datos para generar gráficas.")
+
