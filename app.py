@@ -352,10 +352,10 @@ else:
                         {resumen_final}
                     </div>
                     <div style="background:rgba(0,193,169,0.1); padding:12px; border-radius:6px; font-size:14px; color:#aaa; border-left: 2px solid #00c1a9;">
-                        💡 <b>Acción:</b> {a.get('accion_sugerida')}
+                         <b>Acción:</b> {a.get('accion_sugerida')}
                     </div>
                     <div style="margin-top:15px; text-align:right;">
-                        <a href="{n.get('url')}" target="_blank" style="color:{color}; text-decoration:none; font-weight:bold; font-size:13px;">Fuente 🔗</a>
+                        <a href="{n.get('url')}" target="_blank" style="color:{color}; text-decoration:none; font-weight:bold; font-size:13px;">Fuente </a>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -373,6 +373,7 @@ else:
             with c2: 
                 grp = df.groupby('departamento')['relevancia_score'].mean().reset_index()
                 st.plotly_chart(px.bar(grp, x='departamento', y='relevancia_score', color='departamento', color_discrete_map=COLORES_DEPT), use_container_width=True)
+
 
 
 
