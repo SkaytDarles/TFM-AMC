@@ -141,7 +141,46 @@ def analizar_con_gemini(texto, titulo, dept):
     JSON Output:
     {{
         "titulo_mejorado": "...",
-@@ -155,51 +184,51 @@ def buscador_inteligente():
+        "resumen": "...",
+        "accion": "...",
+        "score": 90
+    }}
+    """
+    for _ in range(2): # 2 intentos
+        try:
+            response = model.generate_content(prompt)
+            data = limpiar_json(response.text)
+            if data: return data
+        except: time.sleep(1)
+
+    return {
+        "titulo_mejorado": titulo,
+        "resumen": f"{texto[:200]}...",
+        "accion": "Leer fuente original.",
+        "score": 70
+    }
+
+def buscador_inteligente():
+    """
+    MODO CASCADA CON FILTRO DE ACCESO
+    """
+    count_news = 0
+    ddgs = DDGS()
+    
+    print("🔓 Iniciando Búsqueda en Fuentes Abiertas...")
+    
+    for dept, query in QUERIES_DEPT.items():
+        resultados = []
+        
+        # ESTRATEGIA 1: Noticias recientes en México (Intento estricto)
+        try:
+            gen = ddgs.news(query, region="mx-es", timelimit="d", max_results=3)
+            resultados = list(gen)
+        except: pass
+        
+        # ESTRATEGIA 2: Si falla, buscar en WEB GENERAL (Blogs, PDFs, Artículos libres)
+        # Esto salta los muros de pago de los periódicos
+        if not resultados:
             try:
                 # Quitamos el filtro de región estricta para ampliar resultados en español global
                 gen = ddgs.text(query + " español", region="wt-wt", timelimit="w", max_results=2)
@@ -193,74 +232,48 @@ def analizar_con_gemini(texto, titulo, dept):
 # ==========================================
 def enviar_email(num, dest, nombre):
     if num == 0: return
-@@ -299,61 +328,67 @@ else:
-    hoy = datetime.datetime.now().replace(hour=0, minute=0, second=0)
-    ayer = hoy - datetime.timedelta(days=1)
-    
-    query = db.collection('news_articles')
-    if mis_intereses: query = query.where(filter=FieldFilter('analysis.departamento', 'in', mis_intereses))
-    
-    if filtro_tiempo == "Tiempo Real (Hoy)":
-        query = query.where(filter=FieldFilter('published_at', '>=', hoy))
-    elif filtro_tiempo == "Ayer":
-        query = query.where(filter=FieldFilter('published_at', '>=', ayer)).where(filter=FieldFilter('published_at', '<', hoy))
-    
-    tab1, tab2 = st.tabs(["Noticias", "Métricas"])
-    
-    with tab1:
-        docs = query.order_by('published_at', direction=firestore.Query.DESCENDING).limit(20).stream()
-        lista = [d.to_dict() for d in docs]
-        
-        if lista:
-            for n in lista:
-                a = n.get('analysis', {})
-                dept = a.get('departamento', 'General')
-                color = COLORES_DEPT.get(dept, '#888')
-                fecha = n.get('published_at')
-                fecha_str = fecha.strftime("%H:%M") if filtro_tiempo == "Tiempo Real (Hoy)" else fecha.strftime("%d/%m %H:%M")
-                
-                resumen_texto = a.get('resumen_ejecutivo', ['Sin resumen disponible.'])
-                if isinstance(resumen_texto, list): resumen_final = resumen_texto[0] if resumen_texto else 'Sin resumen disponible.'
-                else: resumen_final = str(resumen_texto)
-                if not resumen_final or resumen_final.lower() in ('none', 'null', 'nan'):
-                    resumen_final = 'Sin resumen disponible.'
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = REMITENTE_EMAIL
+        msg['To'] = dest
+        msg['Subject'] = Header(f"🔓 AMC Report: {num} Noticias Abiertas", 'utf-8')
+        html = f"""
+        <div style="font-family:sans-serif; padding:20px; background:#f4f4f4;">
+            <h2 style="color:#00c1a9;">AMC INTELLIGENCE</h2>
+            <p>Hola {nombre}, hemos recolectado <b>{num} noticias de fuentes abiertas</b>.</p>
+            <a href="https://amc-dashboard.streamlit.app">Ver Dashboard</a>
+        </div>
+        """
+        msg.attach(MIMEText(html, 'html', 'utf-8'))
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(REMITENTE_EMAIL, REMITENTE_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        return True
+    except: return False
 
-                accion_final = a.get('accion_sugerida')
-                if not accion_final or str(accion_final).lower() in ('none', 'null', 'nan'):
-                    accion_final = 'Leer fuente original.'
-
-                st.markdown(f"""
-                <div style="background:#161b22; border-left:5px solid {color}; border-radius:8px; padding:20px; margin-bottom:20px; border:1px solid #30363d;">
-                    <div style="display:flex; justify-content:space-between; color:{color}; font-weight:bold; font-size:12px; margin-bottom:8px;">
-                        <span>{dept.upper()}</span>
-                        <span style="color:#666;">{fecha_str}</span>
-                    </div>
-                    <h3 style="color:#fff; margin:0 0 12px 0; font-size:20px;">{n.get('title')}</h3>
-                    <div style="color:#c9d1d9; font-size:15px; line-height:1.6; margin-bottom:15px; text-align: justify;">
-                        {resumen_final}
-                    </div>
-                    <div style="background:rgba(0,193,169,0.1); padding:12px; border-radius:6px; font-size:14px; color:#aaa; border-left: 2px solid #00c1a9;">
-                         <b>Acción:</b> {accion_final}
-                    </div>
-                    <div style="margin-top:15px; text-align:right;">
-                        <a href="{n.get('url')}" target="_blank" style="color:{color}; text-decoration:none; font-weight:bold; font-size:13px;">Fuente </a>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            if filtro_tiempo == "Tiempo Real (Hoy)":
-                st.info("ℹ️ Buscando... Si tarda, prueba el botón 'Escaneo Web Abierta' en el menú.")
-            else: st.warning("Sin datos.")
-
-    with tab2:
-        all_docs = db.collection('news_articles').limit(100).stream()
-        df = pd.DataFrame([d.to_dict()['analysis'] for d in all_docs if 'analysis' in d.to_dict()])
-        if not df.empty:
-            c1, c2 = st.columns(2)
-            with c1: st.plotly_chart(px.pie(df, names='departamento', color='departamento', color_discrete_map=COLORES_DEPT), use_container_width=True)
-            with c2: 
-                grp = df.groupby('departamento')['relevancia_score'].mean().reset_index()
-                st.plotly_chart(px.bar(grp, x='departamento', y='relevancia_score', color='departamento', color_discrete_map=COLORES_DEPT), use_container_width=True)
+def verificar_ingesta_hoy():
+    inicio_hoy = datetime.datetime.now().replace(hour=0, minute=0, second=0)
+    docs = db.collection('news_articles').where(filter=FieldFilter('published_at', '>=', inicio_hoy)).limit(1).stream()
+    
+    if not list(docs):
+        placeholder = st.empty()
+        with placeholder.container():
+            st.warning("🔍 Buscando en fuentes gratuitas y blogs tecnológicos...")
+            bar = st.progress(0)
+            n = buscador_inteligente()
+            bar.progress(100)
+            
+            if n > 0:
+                st.success(f"✅ Ingesta Libre: {n} noticias encontradas.")
+                enviar_email(n, st.session_state.get('user_email', REMITENTE_EMAIL), "Usuario")
+            else:
+                st.error("⚠️ No se encontró información relevante en fuentes abiertas hoy.")
+            
+            time.sleep(1.5)
+        placeholder.empty()
+        st.rerun()
 
 # ==========================================
 # 5. UI PRINCIPAL
@@ -337,9 +350,15 @@ else:
                 fecha = n.get('published_at')
                 fecha_str = fecha.strftime("%H:%M") if filtro_tiempo == "Tiempo Real (Hoy)" else fecha.strftime("%d/%m %H:%M")
                 
-                resumen_texto = a.get('resumen_ejecutivo', ['Sin resumen'])
-                if isinstance(resumen_texto, list): resumen_final = resumen_texto[0]
+                resumen_texto = a.get('resumen_ejecutivo', ['Sin resumen disponible.'])
+                if isinstance(resumen_texto, list): resumen_final = resumen_texto[0] if resumen_texto else 'Sin resumen disponible.'
                 else: resumen_final = str(resumen_texto)
+                if not resumen_final or resumen_final.lower() in ('none', 'null', 'nan'):
+                    resumen_final = 'Sin resumen disponible.'
+
+                accion_final = a.get('accion_sugerida')
+                if not accion_final or str(accion_final).lower() in ('none', 'null', 'nan'):
+                    accion_final = 'Leer fuente original.'
 
                 st.markdown(f"""
                 <div style="background:#161b22; border-left:5px solid {color}; border-radius:8px; padding:20px; margin-bottom:20px; border:1px solid #30363d;">
@@ -352,13 +371,13 @@ else:
                         {resumen_final}
                     </div>
                     <div style="background:rgba(0,193,169,0.1); padding:12px; border-radius:6px; font-size:14px; color:#aaa; border-left: 2px solid #00c1a9;">
-                         <b>Acción:</b> {a.get('accion_sugerida')}
+                        💡 <b>Acción:</b> {accion_final}
                     </div>
                     <div style="margin-top:15px; text-align:right;">
-                        <a href="{n.get('url')}" target="_blank" style="color:{color}; text-decoration:none; font-weight:bold; font-size:13px;">Fuente </a>
+                        <a href="{n.get('url')}" target="_blank" style="color:{color}; text-decoration:none; font-weight:bold; font-size:13px;">Fuente 🔗</a>
                     </div>
                 </div>
-                    """, unsafe_allow_html=True)
+                """, unsafe_allow_html=True)
         else:
             if filtro_tiempo == "Tiempo Real (Hoy)":
                 st.info("ℹ️ Buscando... Si tarda, prueba el botón 'Escaneo Web Abierta' en el menú.")
@@ -373,9 +392,3 @@ else:
             with c2: 
                 grp = df.groupby('departamento')['relevancia_score'].mean().reset_index()
                 st.plotly_chart(px.bar(grp, x='departamento', y='relevancia_score', color='departamento', color_discrete_map=COLORES_DEPT), use_container_width=True)
-
-
-
-
-
-
