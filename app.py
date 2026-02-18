@@ -243,7 +243,7 @@ def enviar_email(num, dest, nombre):
                          <b>Acción:</b> {accion_final}
                     </div>
                     <div style="margin-top:15px; text-align:right;">
-                        <a href="{n.get('url')}" target="_blank" style="color:{color}; text-decoration:none; font-weight:bold; font-size:13px;">Fuente 🔗</a>
+                        <a href="{n.get('url')}" target="_blank" style="color:{color}; text-decoration:none; font-weight:bold; font-size:13px;">Fuente </a>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -373,6 +373,7 @@ else:
             with c2: 
                 grp = df.groupby('departamento')['relevancia_score'].mean().reset_index()
                 st.plotly_chart(px.bar(grp, x='departamento', y='relevancia_score', color='departamento', color_discrete_map=COLORES_DEPT), use_container_width=True)
+
 
 
 
