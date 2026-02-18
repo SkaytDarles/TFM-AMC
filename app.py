@@ -358,7 +358,7 @@ else:
                         <a href="{n.get('url')}" target="_blank" style="color:{color}; text-decoration:none; font-weight:bold; font-size:13px;">Fuente </a>
                     </div>
                 </div>
-                """, unsafe_allow_html=True)
+                    """, unsafe_allow_html=True)
         else:
             if filtro_tiempo == "Tiempo Real (Hoy)":
                 st.info("ℹ️ Buscando... Si tarda, prueba el botón 'Escaneo Web Abierta' en el menú.")
