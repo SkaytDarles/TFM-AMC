@@ -47,20 +47,28 @@ COLORES_DEPT = {
 # ==========================================
 # 2. CONEXIÓN FIREBASE HÍBRIDA (SIRVE PARA LOCAL Y NUBE)
 # ==========================================
-# --- CONEXIÓN FIREBASE ---
+# CONEXIÓN FIREBASE (MODO HÍBRIDO)
+# ==========================================
+# Este bloque funciona tanto en tu PC como en la Nube sin tocar nada.
+
 if not firebase_admin._apps:
     try:
         # INTENTO 1: Buscar en la Nube (Secrets de Streamlit)
-        # Esto funcionará cuando esté publicado en Internet
+        # Leemos la llave desde la configuración segura de la web
         key_content = st.secrets["FIREBASE_KEY"]["text_key"]
+        # Convertimos el texto a diccionario JSON
         key_dict = json.loads(key_content)
         cred = credentials.Certificate(key_dict)
+        firebase_admin.initialize_app(cred)
     except Exception as e:
         # INTENTO 2: Buscar en Local (Tu PC)
-        # Esto funcionará cuando lo corras en tu computadora
-        cred = credentials.Certificate('serviceAccountKey.json')
-
-    firebase_admin.initialize_app(cred)
+        # Si falla lo de arriba (porque estás en tu casa), busca el archivo
+        try:
+            cred = credentials.Certificate('serviceAccountKey.json')
+            firebase_admin.initialize_app(cred)
+        except:
+            st.error("❌ Error Crítico: No se encuentra la llave de seguridad (Firebase Key).")
+            st.stop()
 
 
 db = firestore.client()
@@ -312,4 +320,5 @@ else:
                 fig2 = px.bar(grp, x='Dept', y='Score', color='Dept', color_discrete_map=COLORES_DEPT)
 
                 st.plotly_chart(fig2, use_container_width=True)
+
 
