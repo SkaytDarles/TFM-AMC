@@ -80,6 +80,9 @@ st.markdown("""
 REMITENTE_EMAIL = "darlesskayt@gmail.com"
 REMITENTE_PASSWORD = "dgwafnrnahcvgpjz" 
 
+# CONFIGURACIÓN DEL UMBRAL DE CONFIANZA
+MIN_SCORE_IA = 75
+
 LISTA_DEPARTAMENTOS = [
     "Finanzas y ROI", 
     "FoodTech and Supply Chain", 
@@ -413,13 +416,13 @@ def main_app():
         if not lista_noticias:
             st.info("📭 Sin noticias. Usa el botón '🔄 Escanear' en la barra lateral.")
         else:
-            # BOTÓN "AUTO-SELECT TOP IA"
+            # BOTÓN "AUTO-SELECT TOP IA" (MODIFICADO A 75%)
             col_ia_1, col_ia_2 = st.columns([3, 1])
             with col_ia_2:
-                if st.button("✨ Auto-selección IA (>80)"):
+                if st.button(f"✨ Auto-selección IA (>{MIN_SCORE_IA})"):
                     added = 0
                     for n in lista_noticias:
-                        if n['analysis'].get('relevancia_score', 0) > 80:
+                        if n['analysis'].get('relevancia_score', 0) > MIN_SCORE_IA:
                             st.session_state['selected_news'].add(n['title'])
                             added += 1
                     st.toast(f"IA seleccionó {added} noticias relevantes.", icon="🤖")
@@ -454,9 +457,9 @@ def main_app():
                         st.caption(f"**{dept}** • {n.get('published_at').strftime('%H:%M')}")
                         st.markdown(f"{a.get('resumen_ejecutivo', '...')}")
                         
-                        # IA Badge + Acción
-                        badge_color = "#00E676" if score > 80 else "#c9d1d9"
-                        border_color = "#00E676" if score > 80 else "#444"
+                        # IA Badge + Acción (MODIFICADO A 75%)
+                        badge_color = "#00E676" if score > MIN_SCORE_IA else "#c9d1d9"
+                        border_color = "#00E676" if score > MIN_SCORE_IA else "#444"
                         
                         st.markdown(f"""
                         <div style="margin-top:10px; display:flex; gap:10px;">
